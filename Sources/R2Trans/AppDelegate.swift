@@ -35,6 +35,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             object: nil
         )
         openSettings()
+        checkForUpdatesOnLaunch()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -536,6 +537,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func quit() {
         NSApp.terminate(nil)
+    }
+
+    private func checkForUpdatesOnLaunch() {
+        Task { [weak self] in
+            guard let update = await UpdateChecker.shared.checkForUpdate() else {
+                return
+            }
+
+            self?.showUpdateAvailable(update)
+        }
+    }
+
+    private func showUpdateAvailable(_ update: UpdateInfo) {
+        NSApp.activate(ignoringOtherApps: true)
+
+        let alert = NSAlert()
+        alert.messageText = AppText.text(.updateAvailableTitle)
+        alert.informativeText = String(
+            format: AppText.text(.updateAvailableMessage),
+            update.latestVersion,
+            update.currentVersion
+        )
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: AppText.text(.downloadUpdate))
+        alert.addButton(withTitle: AppText.text(.later))
+
+        if alert.runModal() == .alertFirstButtonReturn {
+            NSWorkspace.shared.open(update.downloadURL)
+        }
     }
 
     private func requestAccessibilityIfNeeded(prompt: Bool) throws {

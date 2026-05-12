@@ -83,6 +83,10 @@ enum AppText {
         case openAITemporaryFailure
         case save
         case close
+        case updateAvailableTitle
+        case updateAvailableMessage
+        case downloadUpdate
+        case later
         case settingsError
         case pressShortcut
         case pressModifierAndCharacter
@@ -180,6 +184,10 @@ enum AppText {
         .openAITemporaryFailure: "OpenAI is temporarily unavailable. Try again in a moment.",
         .save: "Save",
         .close: "Close",
+        .updateAvailableTitle: "R2Trans Update Available",
+        .updateAvailableMessage: "Version %@ is available. You are currently using %@.",
+        .downloadUpdate: "Download",
+        .later: "Later",
         .settingsError: "Settings Error",
         .pressShortcut: "Press shortcut",
         .pressModifierAndCharacter: "Press a modifier and character key",
@@ -277,6 +285,10 @@ enum AppText {
         .openAITemporaryFailure: "OpenAI 서비스가 일시적으로 응답하지 않습니다. 잠시 후 다시 시도해주세요.",
         .save: "저장",
         .close: "닫기",
+        .updateAvailableTitle: "R2Trans 업데이트가 있습니다",
+        .updateAvailableMessage: "%@ 버전을 사용할 수 있습니다. 현재 버전은 %@입니다.",
+        .downloadUpdate: "다운로드",
+        .later: "나중에",
         .settingsError: "설정 오류",
         .pressShortcut: "단축키를 입력하세요",
         .pressModifierAndCharacter: "보조키와 문자 키를 함께 눌러주세요",
@@ -374,6 +386,10 @@ enum AppText {
         .openAITemporaryFailure: "OpenAIが一時的に利用できません。しばらくしてからもう一度お試しください。",
         .save: "保存",
         .close: "閉じる",
+        .updateAvailableTitle: "R2Transのアップデートがあります",
+        .updateAvailableMessage: "バージョン%@を利用できます。現在のバージョンは%@です。",
+        .downloadUpdate: "ダウンロード",
+        .later: "後で",
         .settingsError: "設定エラー",
         .pressShortcut: "ショートカットを押してください",
         .pressModifierAndCharacter: "修飾キーと文字キーを押してください",
@@ -471,6 +487,10 @@ enum AppText {
         .openAITemporaryFailure: "OpenAI 暂时不可用。请稍后重试。",
         .save: "保存",
         .close: "关闭",
+        .updateAvailableTitle: "R2Trans 有可用更新",
+        .updateAvailableMessage: "版本 %@ 可用。当前版本是 %@。",
+        .downloadUpdate: "下载",
+        .later: "稍后",
         .settingsError: "设置错误",
         .pressShortcut: "按下快捷键",
         .pressModifierAndCharacter: "请同时按下修饰键和字符键",

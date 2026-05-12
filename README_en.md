@@ -104,6 +104,7 @@ If Accessibility permission is already enabled but R2Trans still asks again, rem
 - OpenAI API keys are entered by each user.
 - API keys are stored in the macOS Keychain.
 - Text selected for translation and Live Interpreter audio are sent to OpenAI to perform the requested translation.
+- On launch, R2Trans checks GitHub Releases to see whether a newer version is available.
 - R2Trans is designed to copy selected text, paste the translated result, and then restore the previous clipboard.
 
 ## License
