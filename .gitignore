@@ -1,0 +1,39 @@
+# macOS
+.DS_Store
+._*
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Xcode and local IDE state
+DerivedData/
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcuserstate
+.vscode/
+.idea/
+.claude/settings.local.json
+
+# Build and release artifacts
+build/
+*.app
+*.dmg
+*.pkg
+*.zip
+
+# Local secrets and environment overrides
+.env
+.env.*
+*.pem
+*.p12
+*.cer
+*.mobileprovision
+*.provisionprofile
+*.key
+
+# Logs and temporary files
+*.log
+*.tmp
+*.swp
