@@ -18,13 +18,27 @@
 
 ## 설치 방법
 
-1. GitHub Releases에서 최신 `R2Trans.dmg` 파일을 다운로드합니다.
+### 일반 설치
+
+1. [GitHub Releases](https://github.com/JeffKim-416/R2Trans/releases/latest)에서 최신 `R2Trans.dmg` 파일을 다운로드합니다.
 2. 다운로드한 DMG 파일을 엽니다.
 3. `R2Trans.app`을 `Applications` 폴더로 옮깁니다.
 4. `Applications` 폴더에서 `R2Trans`를 실행합니다.
 5. macOS가 권한을 요청하면 안내에 따라 허용합니다.
 
 macOS에서 "확인되지 않은 개발자" 경고가 보이면 `System Settings > Privacy & Security`에서 R2Trans 실행을 허용한 뒤 다시 열어 주세요.
+
+### 소스 ZIP에서 설치
+
+GitHub에서 소스 코드를 ZIP으로 받은 경우, 최상위 폴더의 `Install.command`를 더블클릭하면 앱을 빌드해서 `/Applications/R2Trans.app`에 설치하고 실행합니다.
+
+1. GitHub의 `Code > Download ZIP`으로 소스 코드를 다운로드합니다.
+2. 압축을 풉니다.
+3. 압축을 푼 폴더 안의 `Install.command`를 더블클릭합니다.
+4. 터미널이 열리면 설치가 끝날 때까지 기다립니다.
+5. macOS가 권한을 요청하면 안내에 따라 허용합니다.
+
+이 방법은 로컬에서 앱을 빌드하므로 Xcode Command Line Tools 또는 Swift toolchain이 필요합니다. 일반 사용자는 GitHub Releases의 DMG 설치를 권장합니다.
 
 ## 처음 설정하기
 

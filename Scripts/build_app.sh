@@ -11,6 +11,43 @@ CODESIGN_IDENTITY="${R2TRANS_CODESIGN_IDENTITY:--}"
 
 cd "$ROOT_DIR"
 
+normalize_marketing_version() {
+    local raw_version="$1"
+    local version="${raw_version#v}"
+
+    if [[ ! "$version" =~ ^[0-9]+[.][0-9]+[.][0-9]+$ ]]; then
+        echo "Invalid R2Trans version '$raw_version'. Expected vX.Y.Z or X.Y.Z." >&2
+        exit 1
+    fi
+
+    echo "$version"
+}
+
+resolve_app_version() {
+    local exact_tag=""
+
+    if [[ -n "${R2TRANS_VERSION:-}" ]]; then
+        normalize_marketing_version "$R2TRANS_VERSION"
+        return
+    fi
+
+    exact_tag="$(git describe --tags --exact-match --match 'v[0-9]*.[0-9]*.[0-9]*' 2>/dev/null || true)"
+    if [[ -n "$exact_tag" ]]; then
+        normalize_marketing_version "$exact_tag"
+        return
+    fi
+
+    normalize_marketing_version "${R2TRANS_DEFAULT_VERSION:-0.1.0}"
+}
+
+APP_VERSION="$(resolve_app_version)"
+APP_BUILD_VERSION="${R2TRANS_BUILD_VERSION:-$APP_VERSION}"
+
+if [[ ! "$APP_BUILD_VERSION" =~ ^[0-9]+([.][0-9]+){0,2}$ ]]; then
+    echo "Invalid R2Trans build version '$APP_BUILD_VERSION'. Expected a numeric build version." >&2
+    exit 1
+fi
+
 mkdir -p "$BUILD_DIR/home" "$BUILD_DIR/cache" "$BUILD_DIR/module-cache"
 
 export HOME="$BUILD_DIR/home"
@@ -24,7 +61,7 @@ mkdir -p "$MACOS_DIR"
 
 cp "$SWIFT_BUILD_DIR/release/R2Trans" "$MACOS_DIR/R2Trans"
 
-cat > "$CONTENTS_DIR/Info.plist" <<'PLIST'
+cat > "$CONTENTS_DIR/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -42,9 +79,9 @@ cat > "$CONTENTS_DIR/Info.plist" <<'PLIST'
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.1.0</string>
+    <string>$APP_VERSION</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>$APP_BUILD_VERSION</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
     <key>NSHighResolutionCapable</key>

@@ -18,13 +18,27 @@ Select text in the app you are already using, press the hotkey, and R2Trans repl
 
 ## Installation
 
-1. Download the latest `R2Trans.dmg` from GitHub Releases.
+### Standard Install
+
+1. Download the latest `R2Trans.dmg` from [GitHub Releases](https://github.com/JeffKim-416/R2Trans/releases/latest).
 2. Open the downloaded DMG file.
 3. Move `R2Trans.app` into the `Applications` folder.
 4. Launch `R2Trans` from `Applications`.
 5. Grant the macOS permissions requested by the app.
 
 If macOS shows an "unidentified developer" warning, open `System Settings > Privacy & Security`, allow R2Trans to run, then open the app again.
+
+### Install from Source ZIP
+
+If you downloaded the source code as a ZIP from GitHub, double-click `Install.command` in the top-level folder to build the app, install it to `/Applications/R2Trans.app`, and launch it.
+
+1. Download the source code with `Code > Download ZIP` on GitHub.
+2. Unzip the download.
+3. Double-click `Install.command` in the unzipped folder.
+4. Wait for the Terminal window to finish the install.
+5. Grant the macOS permissions requested by the app.
+
+This method builds the app locally, so it requires Xcode Command Line Tools or a Swift toolchain. Most users should install the DMG from GitHub Releases.
 
 ## First-Time Setup
 

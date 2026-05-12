@@ -1,0 +1,81 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, for example v0.1.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish DMG
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release tag
+        id: release
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ inputs.tag }}"
+          else
+            tag="${{ github.ref_name }}"
+          fi
+
+          case "$tag" in
+            v*.*.*) ;;
+            *)
+              echo "::error::Release tag must match v*.*.*, got '$tag'"
+              exit 1
+              ;;
+          esac
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout release tag
+        env:
+          TAG_NAME: ${{ steps.release.outputs.tag }}
+        run: |
+          git fetch --tags --force origin
+          git checkout --detach "refs/tags/$TAG_NAME"
+
+      - name: Build DMG
+        env:
+          R2TRANS_VERSION: ${{ steps.release.outputs.tag }}
+        run: Scripts/create_dmg.sh
+
+      - name: Create checksum
+        run: |
+          cd build
+          shasum -a 256 R2Trans.dmg > R2Trans.dmg.sha256
+          cat R2Trans.dmg.sha256
+
+      - name: Create or update GitHub Release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ steps.release.outputs.tag }}
+        run: |
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            gh release upload "$TAG_NAME" \
+              build/R2Trans.dmg \
+              build/R2Trans.dmg.sha256 \
+              --clobber
+          else
+            gh release create "$TAG_NAME" \
+              build/R2Trans.dmg \
+              build/R2Trans.dmg.sha256 \
+              --title "$TAG_NAME" \
+              --generate-notes
+          fi

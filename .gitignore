@@ -23,6 +23,9 @@ build/
 *.pkg
 *.zip
 
+# Developer-only local notes
+RELEASING.md
+
 # Local secrets and environment overrides
 .env
 .env.*
