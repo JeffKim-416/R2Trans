@@ -8,12 +8,15 @@ final class LiveInterpreterService {
 
     private let microphoneStreamer = MicrophoneAudioStreamer()
     private let systemAudioStreamer = SystemAudioStreamer()
+    private let provisionalSubtitleTranslator = ProvisionalLiveSubtitleTranslator()
     private let stateQueue = DispatchQueue(label: "R2Trans.LiveInterpreterService.state")
     private let audioLevelQueue = DispatchQueue(label: "R2Trans.LiveInterpreterService.audioLevel")
     private var translationSession: RealtimeTranslationSocket?
     private var sourceTranscript = ""
     private var translatedSubtitle = ""
+    private var provisionalSubtitle = ""
     private var targetLanguageDisplayName = ""
+    private var lastOfficialSubtitleUpdateTime: TimeInterval = 0
     private var lastAudioLevelUpdate: [LiveInterpreterAudioSource: TimeInterval] = [:]
     private var audioChunkCount = 0
 
@@ -77,6 +80,7 @@ final class LiveInterpreterService {
     func stop() {
         microphoneStreamer.stop()
         systemAudioStreamer.stop()
+        provisionalSubtitleTranslator.cancel()
         translationSession?.disconnect()
         translationSession = nil
 
@@ -197,10 +201,13 @@ final class LiveInterpreterService {
                 self.sendUpdate(.debug("input transcript delta"))
                 self.sourceTranscript = Self.trimmedTail(self.sourceTranscript + delta, limit: 800)
                 self.sendUpdate(.sourceTranscript(Self.lineBrokenSentences(in: self.sourceTranscript)))
+                self.requestProvisionalSubtitle(targetLanguage: targetLanguage)
             case .outputTranscriptDelta(let delta):
                 self.sendUpdate(.debug("output transcript delta"))
                 self.translatedSubtitle = Self.trimmedTail(self.translatedSubtitle + delta, limit: 1_500)
-                self.publishSubtitle()
+                self.provisionalSubtitle = ""
+                self.lastOfficialSubtitleUpdateTime = CFAbsoluteTimeGetCurrent()
+                self.publishSubtitle(preferProvisional: false)
             case .status(let message):
                 self.sendUpdate(.status(message))
             case .debug(let message):
@@ -211,15 +218,49 @@ final class LiveInterpreterService {
         }
     }
 
-    private func publishSubtitle() {
-        sendUpdate(.subtitle(Self.lineBrokenSentences(in: translatedSubtitle), languageLabel: targetLanguageDisplayName))
+    private func requestProvisionalSubtitle(targetLanguage: RealtimeTranslationLanguage) {
+        provisionalSubtitleTranslator.submit(
+            sourceTranscript: sourceTranscript,
+            targetLanguageCode: targetLanguage.code
+        ) { [weak self] subtitle in
+            self?.stateQueue.async { [weak self] in
+                guard let self else {
+                    return
+                }
+
+                let officialAge = CFAbsoluteTimeGetCurrent() - self.lastOfficialSubtitleUpdateTime
+                guard self.translatedSubtitle.isEmpty || officialAge > 0.65 else {
+                    return
+                }
+
+                self.provisionalSubtitle = subtitle
+                self.publishSubtitle(preferProvisional: true)
+            }
+        }
+    }
+
+    private func publishSubtitle(preferProvisional: Bool) {
+        let subtitle: String
+
+        if preferProvisional, !provisionalSubtitle.isEmpty {
+            subtitle = translatedSubtitle.isEmpty
+                ? provisionalSubtitle
+                : "\(translatedSubtitle)\n\(provisionalSubtitle)"
+        } else {
+            subtitle = translatedSubtitle
+        }
+
+        sendUpdate(.subtitle(Self.lineBrokenSentences(in: subtitle), languageLabel: targetLanguageDisplayName))
     }
 
     private func resetTranscriptState() {
         stateQueue.sync {
             sourceTranscript = ""
             translatedSubtitle = ""
+            provisionalSubtitle = ""
+            lastOfficialSubtitleUpdateTime = 0
             audioChunkCount = 0
+            provisionalSubtitleTranslator.cancel()
         }
         targetLanguageDisplayName = ""
     }
@@ -311,6 +352,149 @@ final class LiveInterpreterService {
 
         let rms = sqrt(sumSquares / Double(sampleCount)) / Double(Int16.max)
         return min(1, rms * 8)
+    }
+}
+
+private final class ProvisionalLiveSubtitleTranslator: @unchecked Sendable {
+    private let translator = OpenAITranslator()
+    private let queue = DispatchQueue(label: "R2Trans.ProvisionalLiveSubtitleTranslator")
+    private var scheduledTask: Task<Void, Never>?
+    private var inFlight = false
+    private var latestText = ""
+    private var targetLanguageCode = ""
+    private var lastRequestedText = ""
+    private var lastRequestTime: TimeInterval = 0
+    private var generation = 0
+
+    func submit(
+        sourceTranscript: String,
+        targetLanguageCode: String,
+        onResult: @escaping (String) -> Void
+    ) {
+        let text = Self.translationWindow(from: sourceTranscript)
+        guard Self.shouldTranslate(text) else {
+            return
+        }
+
+        queue.async { [weak self] in
+            guard let self else {
+                return
+            }
+
+            self.latestText = text
+            self.targetLanguageCode = targetLanguageCode
+
+            guard Self.isMeaningfullyDifferent(text, from: self.lastRequestedText) else {
+                return
+            }
+
+            if !self.inFlight {
+                self.scheduleNextTranslation(onResult: onResult)
+            }
+        }
+    }
+
+    func cancel() {
+        queue.async { [weak self] in
+            self?.scheduledTask?.cancel()
+            self?.scheduledTask = nil
+            self?.inFlight = false
+            self?.latestText = ""
+            self?.targetLanguageCode = ""
+            self?.lastRequestedText = ""
+            self?.lastRequestTime = 0
+            self?.generation += 1
+        }
+    }
+
+    private func scheduleNextTranslation(onResult: @escaping (String) -> Void) {
+        scheduledTask?.cancel()
+
+        let now = CFAbsoluteTimeGetCurrent()
+        let delay = max(0.25, 0.9 - (now - lastRequestTime))
+        let scheduledGeneration = generation
+
+        scheduledTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard !Task.isCancelled else {
+                return
+            }
+
+            self?.queue.async { [weak self] in
+                guard self?.generation == scheduledGeneration else {
+                    return
+                }
+
+                self?.startTranslation(onResult: onResult)
+            }
+        }
+    }
+
+    private func startTranslation(onResult: @escaping (String) -> Void) {
+        guard !inFlight, Self.isMeaningfullyDifferent(latestText, from: lastRequestedText) else {
+            return
+        }
+
+        let requestText = latestText
+        let requestTargetLanguageCode = targetLanguageCode
+        lastRequestedText = requestText
+        lastRequestTime = CFAbsoluteTimeGetCurrent()
+        inFlight = true
+        let requestGeneration = generation
+
+        Task { [weak self] in
+            let translated = try? await self?.translator.translateLiveTranscript(
+                requestText,
+                targetLanguageCode: requestTargetLanguageCode
+            )
+
+            self?.queue.async { [weak self] in
+                guard let self else {
+                    return
+                }
+
+                guard self.generation == requestGeneration else {
+                    return
+                }
+
+                self.inFlight = false
+
+                if let translated = translated?.trimmingCharacters(in: .whitespacesAndNewlines), !translated.isEmpty {
+                    onResult(translated)
+                }
+
+                if Self.isMeaningfullyDifferent(self.latestText, from: self.lastRequestedText) {
+                    self.scheduleNextTranslation(onResult: onResult)
+                }
+            }
+        }
+    }
+
+    private static func translationWindow(from sourceTranscript: String) -> String {
+        let trimmed = sourceTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > 280 else {
+            return trimmed
+        }
+
+        return String(trimmed.suffix(280)).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func shouldTranslate(_ text: String) -> Bool {
+        text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .filter { !$0.isWhitespace }
+            .count >= 8
+    }
+
+    private static func isMeaningfullyDifferent(_ lhs: String, from rhs: String) -> Bool {
+        let left = lhs.trimmingCharacters(in: .whitespacesAndNewlines)
+        let right = rhs.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard left != right else {
+            return false
+        }
+
+        return abs(left.count - right.count) >= 6 || !left.hasPrefix(right)
     }
 }
 

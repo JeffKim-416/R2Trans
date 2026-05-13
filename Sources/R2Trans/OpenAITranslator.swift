@@ -9,6 +9,53 @@ final class OpenAITranslator {
     }
 
     func translate(_ text: String) async throws -> String {
+        let translated = try await translate(
+            text,
+            instructions: makeInstructions(),
+            model: settings.model,
+            maxOutputTokens: 2048
+        )
+
+        guard let retryInstructions = autoDetectRetryInstructionsIfNeeded(
+            originalText: text,
+            translatedText: translated
+        ) else {
+            return translated
+        }
+
+        return try await translate(
+            text,
+            instructions: retryInstructions,
+            model: settings.model,
+            maxOutputTokens: 2048
+        )
+    }
+
+    func translateLiveTranscript(_ text: String, targetLanguageCode: String) async throws -> String {
+        let targetLanguage = SupportedLanguage.englishName(for: targetLanguageCode)
+        let instructions = """
+        You are a low-latency live subtitle translator.
+        Translate the partial speech transcript to \(targetLanguage).
+        The input may be incomplete, so produce the best provisional translation from the stable meaning available now.
+        Do not copy the source text unchanged unless it is a name, URL, code, or number that should be preserved.
+        Return only the translated subtitle text.
+        Do not add explanations, labels, or quotation marks.
+        """
+
+        return try await translate(
+            text,
+            instructions: instructions,
+            model: SupportedModel.defaultID,
+            maxOutputTokens: 512
+        )
+    }
+
+    private func translate(
+        _ text: String,
+        instructions: String,
+        model: String,
+        maxOutputTokens: Int
+    ) async throws -> String {
         let apiKey = KeychainStore.loadAPIKey().trimmingCharacters(in: .whitespacesAndNewlines)
         guard !apiKey.isEmpty else {
             throw R2TransError.apiKeyMissing
@@ -19,12 +66,11 @@ final class OpenAITranslator {
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
-        let instructions = makeInstructions()
         let body = ResponsesRequest(
-            model: settings.model,
+            model: model,
             instructions: instructions,
             input: text,
-            maxOutputTokens: 2048
+            maxOutputTokens: maxOutputTokens
         )
 
         request.httpBody = try JSONEncoder.snakeCaseEncoder.encode(body)
@@ -78,11 +124,28 @@ final class OpenAITranslator {
             let pair = settings.autoDetectPair
             let firstLanguage = SupportedLanguage.englishName(for: pair.firstLanguageCode)
             let secondLanguage = SupportedLanguage.englishName(for: pair.secondLanguageCode)
+            let pairSpecificInstruction: String
+
+            switch pair {
+            case .koreanEnglish:
+                pairSpecificInstruction = """
+                For Korean <-> English, treat text with Hangul as Korean and text with Latin words and no Hangul as English.
+                English input must be translated into Korean. Never return English for English input.
+                Korean input must be translated into English.
+                """
+            case .koreanJapanese:
+                pairSpecificInstruction = """
+                For Korean <-> Japanese, treat text with Hangul as Korean and text with Japanese kana or kanji without Hangul as Japanese.
+                Korean input must be translated into Japanese, and Japanese input must be translated into Korean.
+                """
+            }
+
             modeInstruction = """
             Detect whether the user's text is primarily \(firstLanguage) or \(secondLanguage).
             If it is primarily \(firstLanguage), translate it to \(secondLanguage).
             If it is primarily \(secondLanguage), translate it to \(firstLanguage).
             If both languages appear, choose the predominant language and translate to the other language in this pair.
+            \(pairSpecificInstruction)
             """
         } else {
             let sourceLanguage = SupportedLanguage.englishName(for: settings.sourceLanguageCode)
@@ -93,6 +156,22 @@ final class OpenAITranslator {
         return """
         You are a precise translation engine.
         \(modeInstruction)
+        \(styleInstruction(for: settings.translationStyle))
+        Return only the translated text.
+        Preserve line breaks, list structure, numbers, names, URLs, code, and markdown when possible.
+        Do not add explanations or quotation marks.
+        """
+    }
+
+    private func makeForcedTranslationInstructions(sourceLanguageCode: String, targetLanguageCode: String) -> String {
+        let sourceLanguage = SupportedLanguage.englishName(for: sourceLanguageCode)
+        let targetLanguage = SupportedLanguage.englishName(for: targetLanguageCode)
+
+        return """
+        You are a precise translation engine.
+        Translate the user's text from \(sourceLanguage) to \(targetLanguage).
+        The output language must be \(targetLanguage).
+        Do not return the source text unchanged unless it is a name, URL, code, or number that should be preserved.
         \(styleInstruction(for: settings.translationStyle))
         Return only the translated text.
         Preserve line breaks, list structure, numbers, names, URLs, code, and markdown when possible.
@@ -146,6 +225,56 @@ final class OpenAITranslator {
 
         return "\(friendlyMessage)\n\n\(apiMessage)"
     }
+
+    private func autoDetectRetryInstructionsIfNeeded(originalText: String, translatedText: String) -> String? {
+        guard settings.workMode == .translation, settings.autoDetectEnabled else {
+            return nil
+        }
+
+        switch settings.autoDetectPair {
+        case .koreanEnglish:
+            guard Self.looksEnglish(originalText) else {
+                return nil
+            }
+
+            if !Self.containsHangul(translatedText) || Self.normalizedForComparison(originalText) == Self.normalizedForComparison(translatedText) {
+                return makeForcedTranslationInstructions(sourceLanguageCode: "en-US", targetLanguageCode: "ko-KR")
+            }
+
+            return nil
+        case .koreanJapanese:
+            return nil
+        }
+    }
+
+    private static func looksEnglish(_ text: String) -> Bool {
+        let scalarCounts = text.unicodeScalars.reduce(into: (latin: 0, hangul: 0)) { result, scalar in
+            if CharacterSet.r2TransHangul.contains(scalar) {
+                result.hangul += 1
+            } else if CharacterSet.r2TransLatin.contains(scalar) {
+                result.latin += 1
+            }
+        }
+
+        return scalarCounts.latin > 0 && scalarCounts.hangul == 0
+    }
+
+    private static func containsHangul(_ text: String) -> Bool {
+        text.unicodeScalars.contains { CharacterSet.r2TransHangul.contains($0) }
+    }
+
+    private static func normalizedForComparison(_ text: String) -> String {
+        text
+            .lowercased()
+            .components(separatedBy: .whitespacesAndNewlines)
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+private extension CharacterSet {
+    static let r2TransHangul = CharacterSet(charactersIn: "\u{AC00}"..."\u{D7A3}")
+    static let r2TransLatin = CharacterSet(charactersIn: "A"..."Z").union(CharacterSet(charactersIn: "a"..."z"))
 }
 
 private struct ResponsesRequest: Encodable {
