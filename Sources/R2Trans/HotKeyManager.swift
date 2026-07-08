@@ -1,20 +1,74 @@
 import Carbon
 import Foundation
 
-struct HotKey {
+struct HotKey: Equatable {
     let keyCode: UInt32
     let modifiers: UInt32
 }
 
 final class HotKeyManager {
+    private static let hotKeySignature = OSType(0x52545452)
+
     private var eventHotKey: EventHotKeyRef?
     private var eventHandler: EventHandlerRef?
     private var action: (() -> Void)?
-    private let hotKeyID = EventHotKeyID(signature: OSType(0x52545452), id: 1)
+    private var currentHotKey: HotKey?
+    private var nextHotKeyID: UInt32 = 1
 
     func register(hotKey: HotKey, action: @escaping () -> Void) throws {
-        unregister()
+        if eventHotKey != nil, currentHotKey == hotKey {
+            self.action = action
+            return
+        }
+
+        try installEventHandlerIfNeeded()
+
+        let hotKeyID = EventHotKeyID(signature: Self.hotKeySignature, id: nextHotKeyID)
+        var hotKeyRef: EventHotKeyRef?
+        let registerStatus = RegisterEventHotKey(
+            hotKey.keyCode,
+            hotKey.modifiers,
+            hotKeyID,
+            GetApplicationEventTarget(),
+            0,
+            &hotKeyRef
+        )
+
+        guard registerStatus == noErr, let hotKeyRef else {
+            removeEventHandlerIfIdle()
+            throw R2TransError.invalidHotKey("This hotkey could not be registered. It may already be used by macOS or another app.")
+        }
+
+        let previousHotKey = eventHotKey
+        eventHotKey = hotKeyRef
+        currentHotKey = hotKey
         self.action = action
+        advanceHotKeyID()
+
+        if let previousHotKey {
+            UnregisterEventHotKey(previousHotKey)
+        }
+    }
+
+    func unregister() {
+        if let eventHotKey {
+            UnregisterEventHotKey(eventHotKey)
+            self.eventHotKey = nil
+        }
+
+        if let eventHandler {
+            RemoveEventHandler(eventHandler)
+            self.eventHandler = nil
+        }
+
+        currentHotKey = nil
+        action = nil
+    }
+
+    private func installEventHandlerIfNeeded() throws {
+        guard eventHandler == nil else {
+            return
+        }
 
         var eventType = EventTypeSpec(
             eventClass: OSType(kEventClassKeyboard),
@@ -39,7 +93,7 @@ final class HotKeyManager {
                     &hotKeyID
                 )
 
-                guard status == noErr, hotKeyID.id == 1 else {
+                guard status == noErr, hotKeyID.signature == HotKeyManager.hotKeySignature else {
                     return noErr
                 }
 
@@ -62,33 +116,18 @@ final class HotKeyManager {
         guard handlerStatus == noErr else {
             throw R2TransError.invalidHotKey("Unable to install hotkey handler.")
         }
-
-        var hotKeyRef: EventHotKeyRef?
-        let registerStatus = RegisterEventHotKey(
-            hotKey.keyCode,
-            hotKey.modifiers,
-            hotKeyID,
-            GetApplicationEventTarget(),
-            0,
-            &hotKeyRef
-        )
-
-        guard registerStatus == noErr else {
-            throw R2TransError.invalidHotKey("This hotkey could not be registered. It may already be used by macOS or another app.")
-        }
-
-        eventHotKey = hotKeyRef
     }
 
-    func unregister() {
-        if let eventHotKey {
-            UnregisterEventHotKey(eventHotKey)
-            self.eventHotKey = nil
+    private func removeEventHandlerIfIdle() {
+        guard eventHotKey == nil, let eventHandler else {
+            return
         }
 
-        if let eventHandler {
-            RemoveEventHandler(eventHandler)
-            self.eventHandler = nil
-        }
+        RemoveEventHandler(eventHandler)
+        self.eventHandler = nil
+    }
+
+    private func advanceHotKeyID() {
+        nextHotKeyID = nextHotKeyID == UInt32.max ? 1 : nextHotKeyID + 1
     }
 }

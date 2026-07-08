@@ -12,6 +12,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     private let settings = AppSettings.shared
     private let onSave: () -> Void
+    private let onRegisterHotKey: (String) throws -> Void
     private let onAppLanguageChange: () -> Void
     private let onHotKeyRecordingChange: (Bool) -> Void
     private let onLiveInterpreter: () -> Void
@@ -50,11 +51,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     init(
         onSave: @escaping () -> Void,
+        onRegisterHotKey: @escaping (String) throws -> Void,
         onAppLanguageChange: @escaping () -> Void,
         onHotKeyRecordingChange: @escaping (Bool) -> Void,
         onLiveInterpreter: @escaping () -> Void
     ) {
         self.onSave = onSave
+        self.onRegisterHotKey = onRegisterHotKey
         self.onAppLanguageChange = onAppLanguageChange
         self.onHotKeyRecordingChange = onHotKeyRecordingChange
         self.onLiveInterpreter = onLiveInterpreter
@@ -209,6 +212,17 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func refreshLocalizedText() {
+        let selectedWorkModeIndex = selectedIndex(
+            in: workModePopup,
+            count: WorkMode.allCases.count,
+            fallback: WorkMode.allCases.firstIndex(of: settings.workMode) ?? 0
+        )
+        let selectedStyleIndex = selectedIndex(
+            in: stylePopup,
+            count: TranslationStyle.allCases.count,
+            fallback: TranslationStyle.allCases.firstIndex(of: settings.translationStyle) ?? 0
+        )
+
         window?.title = AppText.text(.settingsTitle)
         appLanguageButton.toolTip = AppText.text(.appLanguage)
         appLanguageButton.image = NSImage(systemSymbolName: "character.book.closed", accessibilityDescription: AppText.text(.appLanguage))
@@ -233,10 +247,21 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
         workModePopup.removeAllItems()
         workModePopup.addItems(withTitles: WorkMode.allCases.map(\.displayName))
+        workModePopup.selectItem(at: selectedWorkModeIndex)
         stylePopup.removeAllItems()
         stylePopup.addItems(withTitles: TranslationStyle.allCases.map(\.displayName))
-        stylePopup.selectItem(withTitle: settings.translationStyle.displayName)
+        stylePopup.selectItem(at: selectedStyleIndex)
+        refreshModeAvailability()
         refreshPopupAlignment()
+    }
+
+    private func selectedIndex(in popup: NSPopUpButton, count: Int, fallback: Int) -> Int {
+        let index = popup.indexOfSelectedItem
+        guard 0..<count ~= index else {
+            return fallback
+        }
+
+        return index
     }
 
     private func makeRow(label: NSTextField, control: NSView) -> NSView {
@@ -425,6 +450,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     @objc private func save() {
+        let previousHotKeyString = settings.hotKeyString
+        var registeredHotKeyString: String?
+
         do {
             try HotKeyValidator.validate(hotKeyButton.hotKeyString)
 
@@ -434,6 +462,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             let selectedAutoDetectPair = AutoDetectPair.allCases[autoDetectPairPopup.indexOfSelectedItem]
             let selectedStyle = TranslationStyle.allCases[stylePopup.indexOfSelectedItem]
             let selectedModel = SupportedModel.all[modelPopup.indexOfSelectedItem]
+            try onRegisterHotKey(hotKeyButton.hotKeyString)
+            registeredHotKeyString = hotKeyButton.hotKeyString
+            try LaunchAtLoginManager.setEnabled(launchAtLoginSwitch.state == .on)
+            try KeychainStore.saveAPIKey(apiKeyField.stringValue)
+
             settings.workMode = selectedWorkMode
             settings.sourceLanguageCode = selectedSourceLanguage.code
             settings.targetLanguageCode = selectedTargetLanguage.code
@@ -444,13 +477,14 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             settings.hotKeyString = hotKeyButton.hotKeyString
             settings.model = selectedModel.id
             settings.showStatusBarIcon = showStatusBarSwitch.state == .on
-            try LaunchAtLoginManager.setEnabled(launchAtLoginSwitch.state == .on)
-
-            try KeychainStore.saveAPIKey(apiKeyField.stringValue)
             refreshPopupAlignment()
             onSave()
             close()
         } catch {
+            if registeredHotKeyString != nil {
+                try? onRegisterHotKey(previousHotKeyString)
+            }
+
             let alert = NSAlert()
             alert.messageText = AppText.text(.settingsError)
             alert.informativeText = error.localizedDescription

@@ -60,17 +60,25 @@ struct SupportedModel: Equatable {
     let displayName: String
 
     static let all: [SupportedModel] = [
-        SupportedModel(id: "gpt-5.5", displayName: "GPT-5.5 - highest quality"),
+        SupportedModel(id: "gpt-5.5", displayName: "GPT-5.5 - latest highest quality"),
         SupportedModel(id: "gpt-5.4", displayName: "GPT-5.4 - balanced"),
-        SupportedModel(id: "gpt-5.3-codex", displayName: "GPT-5.3 Codex - specialized"),
-        SupportedModel(id: "gpt-5.2", displayName: "GPT-5.2 - compatibility"),
+        SupportedModel(id: "gpt-5.4-mini", displayName: "GPT-5.4 mini - fast and efficient"),
         SupportedModel(id: "gpt-5.4-nano", displayName: "GPT-5.4 nano - lowest cost")
     ]
 
     static let defaultID = "gpt-5.4-nano"
 
     static func displayName(for id: String) -> String {
-        all.first { $0.id == id }?.displayName ?? id
+        all.first { $0.id == normalizedID(id) }?.displayName ?? id
+    }
+
+    static func normalizedID(_ id: String) -> String {
+        let aliases = [
+            "gpt-5.2": "gpt-5.5",
+            "gpt-5.3-codex": "gpt-5.5"
+        ]
+
+        return aliases[id] ?? id
     }
 }
 
@@ -233,11 +241,11 @@ final class AppSettings: @unchecked Sendable {
 
     var model: String {
         get {
-            let storedModel = defaults.string(forKey: Key.model) ?? SupportedModel.defaultID
+            let storedModel = SupportedModel.normalizedID(defaults.string(forKey: Key.model) ?? SupportedModel.defaultID)
             return SupportedModel.all.contains { $0.id == storedModel } ? storedModel : SupportedModel.defaultID
         }
         set {
-            defaults.set(newValue, forKey: Key.model)
+            defaults.set(SupportedModel.normalizedID(newValue), forKey: Key.model)
         }
     }
 

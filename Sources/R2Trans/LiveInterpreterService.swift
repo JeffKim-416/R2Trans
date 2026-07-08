@@ -12,6 +12,7 @@ final class LiveInterpreterService {
     private let stateQueue = DispatchQueue(label: "R2Trans.LiveInterpreterService.state")
     private let audioLevelQueue = DispatchQueue(label: "R2Trans.LiveInterpreterService.audioLevel")
     private var translationSession: RealtimeTranslationSocket?
+    private var closingTranslationSessions: [RealtimeTranslationSocket] = []
     private var sourceTranscript = ""
     private var translatedSubtitle = ""
     private var provisionalSubtitle = ""
@@ -81,8 +82,7 @@ final class LiveInterpreterService {
         microphoneStreamer.stop()
         systemAudioStreamer.stop()
         provisionalSubtitleTranslator.cancel()
-        translationSession?.disconnect()
-        translationSession = nil
+        closeTranslationSession()
 
         sendUpdate(.audioLevel(.microphone, 0))
         sendUpdate(.audioLevel(.systemAudio, 0))
@@ -146,8 +146,29 @@ final class LiveInterpreterService {
             },
             onError: { [weak self] message in
                 self?.sendUpdate(.error(message))
+            },
+            onClosed: { [weak self] socket in
+                self?.removeClosedTranslationSession(socket)
             }
         )
+    }
+
+    private func closeTranslationSession() {
+        guard let translationSession else {
+            return
+        }
+
+        self.translationSession = nil
+        closingTranslationSessions.append(translationSession)
+        translationSession.closeGracefully()
+    }
+
+    private func removeClosedTranslationSession(_ socket: RealtimeTranslationSocket) {
+        closingTranslationSessions.removeAll { $0 === socket }
+
+        if translationSession === socket {
+            translationSession = nil
+        }
     }
 
     private func sendAudio(_ data: Data, from source: LiveInterpreterAudioSource) {
@@ -852,17 +873,22 @@ private final class RealtimeTranslationSocket {
     private let sendQueue: DispatchQueue
     private let onEvent: (RealtimeTranslationLanguage, RealtimeTranslationEvent) -> Void
     private let onError: (String) -> Void
+    private let onClosed: (RealtimeTranslationSocket) -> Void
     private var task: URLSessionWebSocketTask?
     private var isDisconnected = false
+    private var isClosing = false
+    private var closeFallbackWorkItem: DispatchWorkItem?
 
     init(
         targetLanguage: RealtimeTranslationLanguage,
         onEvent: @escaping (RealtimeTranslationLanguage, RealtimeTranslationEvent) -> Void,
-        onError: @escaping (String) -> Void
+        onError: @escaping (String) -> Void,
+        onClosed: @escaping (RealtimeTranslationSocket) -> Void
     ) {
         self.targetLanguage = targetLanguage
         self.onEvent = onEvent
         self.onError = onError
+        self.onClosed = onClosed
         self.sendQueue = DispatchQueue(label: "R2Trans.RealtimeTranslationSocket.\(targetLanguage.apiLanguageCode)")
     }
 
@@ -880,17 +906,63 @@ private final class RealtimeTranslationSocket {
     }
 
     func sendAudio(_ base64Audio: String) {
+        guard !isClosing else {
+            return
+        }
+
         sendJSON([
             "type": "session.input_audio_buffer.append",
             "audio": base64Audio
         ])
     }
 
-    func disconnect() {
+    func closeGracefully() {
+        guard !isDisconnected else {
+            onClosed(self)
+            return
+        }
+
+        guard task != nil else {
+            finishClosed()
+            return
+        }
+
+        guard !isClosing else {
+            return
+        }
+
+        isClosing = true
+        sendJSON(["type": "session.close"], allowWhileClosing: true)
+
+        let fallback = DispatchWorkItem { [weak self] in
+            guard let self, self.isClosing, !self.isDisconnected else {
+                return
+            }
+
+            self.onEvent(self.targetLanguage, .debug("session.close timed out"))
+            self.finishClosed()
+        }
+        closeFallbackWorkItem = fallback
+        sendQueue.asyncAfter(deadline: .now() + 5, execute: fallback)
+    }
+
+    private func disconnect() {
         isDisconnected = true
+        isClosing = false
+        closeFallbackWorkItem?.cancel()
+        closeFallbackWorkItem = nil
         task?.cancel(with: .goingAway, reason: nil)
         task = nil
         session.invalidateAndCancel()
+    }
+
+    private func finishClosed() {
+        guard !isDisconnected else {
+            return
+        }
+
+        disconnect()
+        onClosed(self)
     }
 
     private func sendSessionUpdate() {
@@ -898,14 +970,6 @@ private final class RealtimeTranslationSocket {
             "type": "session.update",
             "session": [
                 "audio": [
-                    "input": [
-                        "transcription": [
-                            "model": "gpt-realtime-whisper"
-                        ],
-                        "noise_reduction": [
-                            "type": "near_field"
-                        ]
-                    ],
                     "output": [
                         "language": targetLanguage.apiLanguageCode
                     ]
@@ -914,7 +978,7 @@ private final class RealtimeTranslationSocket {
         ])
     }
 
-    private func sendJSON(_ object: [String: Any]) {
+    private func sendJSON(_ object: [String: Any], allowWhileClosing: Bool = false) {
         guard
             let task,
             let data = try? JSONSerialization.data(withJSONObject: object),
@@ -924,13 +988,17 @@ private final class RealtimeTranslationSocket {
         }
 
         sendQueue.async { [weak self] in
-            guard self?.isDisconnected == false else {
+            guard
+                let self,
+                !self.isDisconnected,
+                allowWhileClosing || !self.isClosing
+            else {
                 return
             }
 
             task.send(.string(json)) { error in
                 if let error {
-                    self?.onError(error.localizedDescription)
+                    self.onError(error.localizedDescription)
                 }
             }
         }
@@ -947,7 +1015,11 @@ private final class RealtimeTranslationSocket {
                 self.handle(message)
                 self.receiveNextMessage()
             case .failure(let error):
-                self.onError(error.localizedDescription)
+                if self.isClosing {
+                    self.finishClosed()
+                } else {
+                    self.onError(error.localizedDescription)
+                }
             }
         }
     }
@@ -986,6 +1058,9 @@ private final class RealtimeTranslationSocket {
             }
         case "session.created", "session.updated":
             onEvent(targetLanguage, .debug(type))
+        case "session.closed":
+            onEvent(targetLanguage, .debug(type))
+            finishClosed()
         case "error", "session.error":
             onEvent(targetLanguage, .error(Self.errorMessage(from: object)))
         default:

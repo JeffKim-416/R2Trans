@@ -315,22 +315,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func registerHotKey(shouldShowError: Bool = true) {
-        hotKeyManager.unregister()
-
         do {
-            try HotKeyValidator.validate(settings.hotKeyString)
-            let hotKey = try HotKeyParser.parse(settings.hotKeyString)
-            try hotKeyManager.register(hotKey: hotKey) { [weak self] in
-                guard self?.isRecordingHotKey == false else {
-                    return
-                }
-
-                self?.translateSelectedText()
-            }
+            try registerHotKey(settings.hotKeyString)
         } catch {
             if shouldShowError {
                 showError(AppText.text(.hotkeyError), message: error.localizedDescription)
             }
+        }
+    }
+
+    private func registerHotKey(_ hotKeyString: String) throws {
+        try HotKeyValidator.validate(hotKeyString)
+        let hotKey = try HotKeyParser.parse(hotKeyString)
+        try hotKeyManager.register(hotKey: hotKey) { [weak self] in
+            guard self?.isRecordingHotKey == false else {
+                return
+            }
+
+            self?.translateSelectedText()
         }
     }
 
@@ -507,9 +509,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 onSave: { [weak self] in
                     self?.setupMainMenu()
                     self?.refreshStatusItemVisibility()
-                    self?.registerHotKey()
                     self?.rebuildMenu()
                     self?.settingsWindowController = nil
+                },
+                onRegisterHotKey: { [weak self] hotKeyString in
+                    guard let self else {
+                        return
+                    }
+
+                    try self.registerHotKey(hotKeyString)
                 },
                 onAppLanguageChange: { [weak self] in
                     self?.setupMainMenu()
