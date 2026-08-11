@@ -60,13 +60,12 @@ struct SupportedModel: Equatable {
     let displayName: String
 
     static let all: [SupportedModel] = [
-        SupportedModel(id: "gpt-5.5", displayName: "GPT-5.5 - latest highest quality"),
-        SupportedModel(id: "gpt-5.4", displayName: "GPT-5.4 - balanced"),
-        SupportedModel(id: "gpt-5.4-mini", displayName: "GPT-5.4 mini - fast and efficient"),
-        SupportedModel(id: "gpt-5.4-nano", displayName: "GPT-5.4 nano - lowest cost")
+        SupportedModel(id: "gpt-5.6-sol", displayName: "GPT-5.6 Sol - flagship quality"),
+        SupportedModel(id: "gpt-5.6-terra", displayName: "GPT-5.6 Terra - balanced quality and cost"),
+        SupportedModel(id: "gpt-5.6-luna", displayName: "GPT-5.6 Luna - efficient high-volume")
     ]
 
-    static let defaultID = "gpt-5.4-nano"
+    static let defaultID = "gpt-5.6-luna"
 
     static func displayName(for id: String) -> String {
         all.first { $0.id == normalizedID(id) }?.displayName ?? id
@@ -74,8 +73,13 @@ struct SupportedModel: Equatable {
 
     static func normalizedID(_ id: String) -> String {
         let aliases = [
-            "gpt-5.2": "gpt-5.5",
-            "gpt-5.3-codex": "gpt-5.5"
+            "gpt-5.6": "gpt-5.6-sol",
+            "gpt-5.5": "gpt-5.6-sol",
+            "gpt-5.4": "gpt-5.6-sol",
+            "gpt-5.4-mini": "gpt-5.6-terra",
+            "gpt-5.4-nano": "gpt-5.6-luna",
+            "gpt-5.3-codex": "gpt-5.6-sol",
+            "gpt-5.2": "gpt-5.6-sol"
         ]
 
         return aliases[id] ?? id
@@ -173,7 +177,11 @@ enum WorkMode: String, CaseIterable {
 final class AppSettings: @unchecked Sendable {
     static let shared = AppSettings()
 
-    private let defaults = UserDefaults.standard
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
 
     private enum Key {
         static let mode = "mode"
@@ -241,8 +249,17 @@ final class AppSettings: @unchecked Sendable {
 
     var model: String {
         get {
-            let storedModel = SupportedModel.normalizedID(defaults.string(forKey: Key.model) ?? SupportedModel.defaultID)
-            return SupportedModel.all.contains { $0.id == storedModel } ? storedModel : SupportedModel.defaultID
+            let storedModel = defaults.string(forKey: Key.model) ?? SupportedModel.defaultID
+            let normalizedModel = SupportedModel.normalizedID(storedModel)
+            let resolvedModel = SupportedModel.all.contains { $0.id == normalizedModel }
+                ? normalizedModel
+                : SupportedModel.defaultID
+
+            if storedModel != resolvedModel {
+                defaults.set(resolvedModel, forKey: Key.model)
+            }
+
+            return resolvedModel
         }
         set {
             defaults.set(SupportedModel.normalizedID(newValue), forKey: Key.model)

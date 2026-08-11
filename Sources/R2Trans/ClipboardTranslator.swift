@@ -1,12 +1,12 @@
 import AppKit
 import ApplicationServices
 
+@MainActor
 final class ClipboardTranslator {
     private let translator = OpenAITranslator()
     private let settings = AppSettings.shared
     private var isTranslating = false
 
-    @MainActor
     func translateSelection() async throws -> TranslationOutcome {
         guard !isTranslating else {
             throw R2TransError.alreadyTranslating
@@ -78,7 +78,6 @@ final class ClipboardTranslator {
         keyUp?.post(tap: .cghidEventTap)
     }
 
-    @MainActor
     private func paste(
         _ translatedText: String,
         to targetApplication: NSRunningApplication?,

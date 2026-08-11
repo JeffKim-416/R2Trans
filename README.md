@@ -14,7 +14,8 @@
 - 번역 스타일을 Natural, Formal, Polite, Overly Deferential, Nyang style(냥냥체, 한국어 한정) 중에서 고를 수 있습니다.
 - 번역 결과를 바로 바꾸기 전에 확인 창을 띄울 수 있습니다.
 - Live Interpreter로 마이크 오디오, 시스템 오디오, 또는 둘 다를 실시간 번역할 수 있습니다.
-- 메뉴바에서 번역 방향, 자동 감지, 확인 후 교체, 번역 스타일, Live Interpreter, 로그인 시 실행을 빠르게 바꿀 수 있습니다.
+- Live Transcription으로 같은 오디오를 번역 없이 실시간 원문 자막으로 표시할 수 있습니다.
+- 메뉴바에서 번역 방향, 자동 감지, 확인 후 교체, 번역 스타일, Live Interpreter, Live Transcription, 로그인 시 실행을 빠르게 바꿀 수 있습니다.
 
 ## 설치 방법
 
@@ -26,7 +27,7 @@
 4. `Applications` 폴더에서 `R2Trans`를 실행합니다.
 5. macOS가 권한을 요청하면 안내에 따라 허용합니다.
 
-macOS에서 "확인되지 않은 개발자" 경고가 보이면 `System Settings > Privacy & Security`에서 R2Trans 실행을 허용한 뒤 다시 열어 주세요.
+새 GitHub Release는 Developer ID 서명·공증 검증을 통과한 경우에만 게시되도록 구성되어 있습니다. Gatekeeper가 파일 손상 또는 개발자 확인 오류를 표시한다면 실행을 우회하지 말고, 공식 Release에서 다시 내려받은 뒤 이슈로 알려주세요.
 
 ### 소스 ZIP에서 설치
 
@@ -38,7 +39,7 @@ GitHub에서 소스 코드를 ZIP으로 받은 경우, 최상위 폴더의 `Inst
 4. 터미널이 열리면 설치가 끝날 때까지 기다립니다.
 5. macOS가 권한을 요청하면 안내에 따라 허용합니다.
 
-이 방법은 로컬에서 앱을 빌드하므로 Xcode Command Line Tools 또는 Swift toolchain이 필요합니다. 일반 사용자는 GitHub Releases의 DMG 설치를 권장합니다.
+이 방법은 로컬에서 앱을 빌드하므로 Xcode Command Line Tools 또는 Swift toolchain이 필요합니다. 결과물은 로컬용 ad-hoc 서명이며 공증된 배포 파일이 아니므로, 일반 사용자는 GitHub Releases의 DMG 설치를 권장합니다.
 
 ## 처음 설정하기
 
@@ -77,6 +78,17 @@ Live Interpreter는 음성을 선택한 언어로 실시간 번역하는 기능�
 
 마이크 번역에는 마이크 권한이 필요하고, 시스템 오디오 번역에는 화면 및 시스템 오디오 녹음 권한이 필요합니다.
 
+Live Interpreter는 실시간 번역 오디오 요청과 별도로 빠른 임시 자막을 만들기 위해 누적 원문 일부를 Responses API에 보낼 수 있습니다. 따라서 오디오 사용량과 텍스트 토큰 사용량이 각각 발생할 수 있습니다.
+
+## Live Transcription
+
+Live Transcription은 음성을 번역하지 않고 입력 언어 그대로 실시간 자막으로 표시합니다. 메뉴에서 `실시간 전사...`를 열어 사용할 수 있습니다.
+
+- `gpt-live-transcribe`를 사용해 음성이 들어오는 동안 부분 자막을 갱신합니다.
+- 마이크, 전체 시스템 오디오, 특정 앱 오디오 또는 마이크와 시스템 오디오를 함께 선택할 수 있습니다.
+- 음성 언어를 자동으로 두거나 지원 언어 중 하나를 힌트로 지정할 수 있습니다.
+- 실시간 전사는 오디오 시간 기준으로 별도 과금되며 Free tier에서는 지원되지 않습니다.
+
 ## 지원 언어
 
 현재 앱에 포함된 언어 코드는 다음과 같습니다.
@@ -94,8 +106,8 @@ zh-CN Chinese
 R2Trans가 요청하는 권한은 기능을 실행하는 데 필요한 범위로 제한됩니다.
 
 - 접근성 권한: 선택한 텍스트를 복사하고 번역 결과를 붙여넣기 위해 필요합니다.
-- 마이크 권한: Live Interpreter에서 마이크 오디오를 번역할 때 필요합니다.
-- 화면 및 시스템 오디오 녹음 권한: Live Interpreter에서 시스템 오디오를 번역할 때 필요합니다.
+- 마이크 권한: Live Interpreter 또는 Live Transcription에서 마이크 오디오를 처리할 때 필요합니다.
+- 화면 및 시스템 오디오 녹음 권한: Live Interpreter 또는 Live Transcription에서 시스템 오디오를 처리할 때 필요합니다.
 
 접근성 권한을 이미 허용했는데도 다시 요청된다면, 시스템 설정에서 기존 R2Trans 항목을 삭제한 뒤 `/Applications/R2Trans.app`을 다시 추가하고 앱을 재실행해 주세요.
 
@@ -103,7 +115,8 @@ R2Trans가 요청하는 권한은 기능을 실행하는 데 필요한 범위로
 
 - OpenAI API 키는 사용자가 직접 입력합니다.
 - API 키는 macOS Keychain에 저장됩니다.
-- 번역할 텍스트와 Live Interpreter 오디오는 요청한 번역을 수행하기 위해 OpenAI로 전송됩니다.
+- 번역할 텍스트, Live Interpreter 오디오와 임시 자막용 누적 원문, Live Transcription 오디오는 요청한 기능을 수행하기 위해 OpenAI로 전송됩니다.
+- 텍스트 번역 요청은 Responses API에 저장되지 않도록 `store: false`를 사용합니다.
 - 앱 실행 시 최신 버전 확인을 위해 GitHub Releases에 업데이트 확인 요청을 보냅니다.
 - R2Trans는 선택한 텍스트를 복사하고 번역 결과를 붙여넣은 뒤, 이전 클립보드를 되돌리도록 설계되어 있습니다.
 

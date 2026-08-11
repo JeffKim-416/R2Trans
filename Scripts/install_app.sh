@@ -10,7 +10,6 @@ INSTALL_DIR="/Applications/R2Trans.app"
 
 rm -rf "$INSTALL_DIR"
 ditto "$APP_DIR" "$INSTALL_DIR"
-xattr -dr com.apple.quarantine "$INSTALL_DIR" 2>/dev/null || true
 
 open "$INSTALL_DIR"
 echo "$INSTALL_DIR"

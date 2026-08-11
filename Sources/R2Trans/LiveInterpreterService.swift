@@ -1,25 +1,25 @@
-import AVFoundation
-import CoreMedia
-import ScreenCaptureKit
 import Foundation
 
+@MainActor
 final class LiveInterpreterService {
     var onUpdate: ((LiveInterpreterUpdate) -> Void)?
 
-    private let microphoneStreamer = MicrophoneAudioStreamer()
-    private let systemAudioStreamer = SystemAudioStreamer()
     private let provisionalSubtitleTranslator = ProvisionalLiveSubtitleTranslator()
-    private let stateQueue = DispatchQueue(label: "R2Trans.LiveInterpreterService.state")
-    private let audioLevelQueue = DispatchQueue(label: "R2Trans.LiveInterpreterService.audioLevel")
     private var translationSession: RealtimeTranslationSocket?
     private var closingTranslationSessions: [RealtimeTranslationSocket] = []
+    private var microphoneCapture: MicrophonePCM16AudioCapture?
+    private var systemAudioCapture: SystemPCM16AudioCapture?
+    private var audioMixer: PCM16AudioMixer?
     private var sourceTranscript = ""
+    private var sourceTranscriptSinceOfficialOutput = ""
     private var translatedSubtitle = ""
     private var provisionalSubtitle = ""
     private var targetLanguageDisplayName = ""
     private var lastOfficialSubtitleUpdateTime: TimeInterval = 0
     private var lastAudioLevelUpdate: [LiveInterpreterAudioSource: TimeInterval] = [:]
     private var audioChunkCount = 0
+    private var sessionGeneration = 0
+    private var isStarting = false
 
     private(set) var isRunning = false
 
@@ -28,19 +28,18 @@ final class LiveInterpreterService {
         targetLanguageCode: String,
         systemAudioTarget: LiveInterpreterSystemAudioTarget
     ) async throws {
-        guard !isRunning else {
+        guard !isRunning, !isStarting else {
             return
         }
 
-        let apiKey = KeychainStore.loadAPIKey().trimmingCharacters(in: .whitespacesAndNewlines)
+        let apiKey = try KeychainStore.loadAPIKeyOrThrow().trimmingCharacters(in: .whitespacesAndNewlines)
         guard !apiKey.isEmpty else {
             throw R2TransError.apiKeyMissing
         }
 
-        if inputSource.includesMicrophone {
-            try await requestMicrophoneAccess()
-        }
-
+        sessionGeneration &+= 1
+        let generation = sessionGeneration
+        isStarting = true
         resetTranscriptState()
         targetLanguageDisplayName = SupportedLanguage.displayName(for: targetLanguageCode)
 
@@ -48,50 +47,103 @@ final class LiveInterpreterService {
             targetLanguage: RealtimeTranslationLanguage(
                 code: targetLanguageCode,
                 displayName: targetLanguageDisplayName
-            )
+            ),
+            generation: generation
         )
         self.translationSession = translationSession
 
         sendUpdate(.status(AppText.text(.liveInterpreterConnecting)))
         sendUpdate(.debug("target: \(targetLanguageCode)"))
-        translationSession.connect(apiKey: apiKey)
+
+        var startedMicrophoneCapture: MicrophonePCM16AudioCapture?
+        var startedSystemAudioCapture: SystemPCM16AudioCapture?
+        let startedAudioMixer: PCM16AudioMixer? = inputSource == .microphoneAndSystemAudio
+            ? PCM16AudioMixer()
+            : nil
 
         do {
             if inputSource.includesMicrophone {
-                try microphoneStreamer.start { [weak self] audioData in
-                    self?.sendAudio(audioData, from: .microphone)
+                try await MicrophonePCM16AudioCapture.requestAccess()
+                try ensureCurrentSession(translationSession, generation: generation)
+            }
+
+            try await translationSession.connect(apiKey: apiKey)
+            try ensureCurrentSession(translationSession, generation: generation)
+
+            if let startedAudioMixer {
+                audioMixer = startedAudioMixer
+                startedAudioMixer.start { [weak translationSession] data in
+                    translationSession?.sendAudio(data)
                 }
             }
 
             if inputSource.includesSystemAudio {
-                try await systemAudioStreamer.start(target: systemAudioTarget) { [weak self] audioData in
-                    self?.sendAudio(audioData, from: .systemAudio)
-                }
+                let capture = SystemPCM16AudioCapture()
+                startedSystemAudioCapture = capture
+                systemAudioCapture = capture
+                try await capture.start(
+                    target: systemAudioTarget,
+                    onAudioData: makeAudioHandler(
+                        for: .systemAudio,
+                        socket: translationSession,
+                        generation: generation,
+                        mixer: startedAudioMixer
+                    ),
+                    onFailure: makeCaptureFailureHandler(
+                        socket: translationSession,
+                        generation: generation
+                    )
+                )
+                try ensureCurrentSession(translationSession, generation: generation)
+            }
+
+            if inputSource.includesMicrophone {
+                let capture = MicrophonePCM16AudioCapture()
+                startedMicrophoneCapture = capture
+                microphoneCapture = capture
+                try capture.start(
+                    onAudioData: makeAudioHandler(
+                        for: .microphone,
+                        socket: translationSession,
+                        generation: generation,
+                        mixer: startedAudioMixer
+                    )
+                )
+                try ensureCurrentSession(translationSession, generation: generation)
             }
         } catch {
-            stop()
+            cleanupFailedStart(
+                socket: translationSession,
+                generation: generation,
+                microphoneCapture: startedMicrophoneCapture,
+                systemAudioCapture: startedSystemAudioCapture,
+                audioMixer: startedAudioMixer
+            )
             throw error
         }
 
+        isStarting = false
         isRunning = true
         sendUpdate(.runningStateChanged(true))
         sendUpdate(.status(AppText.text(.liveInterpreterListening)))
     }
 
     func stop() {
-        microphoneStreamer.stop()
-        systemAudioStreamer.stop()
+        let wasActive = isStarting || isRunning || translationSession != nil
+        sessionGeneration &+= 1
+        isStarting = false
+        isRunning = false
+        stopAudioCapture()
+        closeActiveTranslationSession()
         provisionalSubtitleTranslator.cancel()
-        closeTranslationSession()
 
         sendUpdate(.audioLevel(.microphone, 0))
         sendUpdate(.audioLevel(.systemAudio, 0))
 
-        guard isRunning else {
+        guard wasActive else {
             return
         }
 
-        isRunning = false
         sendUpdate(.runningStateChanged(false))
         sendUpdate(.status(AppText.text(.liveInterpreterStopped)))
     }
@@ -105,147 +157,191 @@ final class LiveInterpreterService {
     }
 
     func availableSystemAudioApplications() async throws -> [LiveInterpreterApplicationAudioTarget] {
-        guard #available(macOS 13.0, *) else {
-            throw R2TransError.systemAudioUnavailable
-        }
-
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-        var seenProcessIDs = Set<pid_t>()
-
-        return content.applications
-            .filter { application in
-                let appName = application.applicationName.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard
-                    !appName.isEmpty,
-                    application.processID != getpid(),
-                    !seenProcessIDs.contains(application.processID)
-                else {
-                    return false
-                }
-
-                seenProcessIDs.insert(application.processID)
-                return true
-            }
-            .map { application in
-                LiveInterpreterApplicationAudioTarget(
-                    processID: application.processID,
-                    appName: application.applicationName,
-                    bundleIdentifier: application.bundleIdentifier.isEmpty ? nil : application.bundleIdentifier
-                )
-            }
-            .sorted { lhs, rhs in
-                lhs.displayName.localizedStandardCompare(rhs.displayName) == .orderedAscending
-            }
+        try await SystemPCM16AudioCapture.availableApplications()
     }
 
-    private func makeTranslationSocket(targetLanguage: RealtimeTranslationLanguage) -> RealtimeTranslationSocket {
+    private func makeTranslationSocket(
+        targetLanguage: RealtimeTranslationLanguage,
+        generation: Int
+    ) -> RealtimeTranslationSocket {
         RealtimeTranslationSocket(
             targetLanguage: targetLanguage,
-            onEvent: { [weak self] targetLanguage, event in
-                self?.handle(event, from: targetLanguage)
+            onEvent: { [weak self] socket, targetLanguage, event in
+                Task { @MainActor [weak self] in
+                    self?.handle(
+                        event,
+                        from: targetLanguage,
+                        socket: socket,
+                        generation: generation
+                    )
+                }
             },
-            onError: { [weak self] message in
-                self?.sendUpdate(.error(message))
+            onTerminalFailure: { [weak self] socket, message in
+                Task { @MainActor [weak self] in
+                    self?.handleTerminalFailure(
+                        message,
+                        socket: socket,
+                        generation: generation,
+                        closeSocket: false
+                    )
+                }
             },
             onClosed: { [weak self] socket in
-                self?.removeClosedTranslationSession(socket)
+                Task { @MainActor [weak self] in
+                    self?.removeClosedTranslationSession(socket)
+                }
             }
         )
     }
 
-    private func closeTranslationSession() {
+    private func closeActiveTranslationSession() {
         guard let translationSession else {
             return
         }
 
         self.translationSession = nil
-        closingTranslationSessions.append(translationSession)
-        translationSession.closeGracefully()
+        retainWhileClosing(translationSession)
     }
 
     private func removeClosedTranslationSession(_ socket: RealtimeTranslationSocket) {
         closingTranslationSessions.removeAll { $0 === socket }
-
-        if translationSession === socket {
-            translationSession = nil
-        }
     }
 
-    private func sendAudio(_ data: Data, from source: LiveInterpreterAudioSource) {
-        publishAudioLevelIfNeeded(for: data, from: source)
-        publishAudioChunkDebugIfNeeded()
-
-        let base64Audio = data.base64EncodedString()
-        translationSession?.sendAudio(base64Audio)
-    }
-
-    private func publishAudioChunkDebugIfNeeded() {
-        audioLevelQueue.async { [weak self] in
-            guard let self else {
+    private func makeAudioHandler(
+        for source: LiveInterpreterAudioSource,
+        socket: RealtimeTranslationSocket,
+        generation: Int,
+        mixer: PCM16AudioMixer?
+    ) -> @Sendable (Data) -> Void {
+        { [weak self, weak socket] data in
+            guard let socket else {
                 return
             }
 
-            self.audioChunkCount += 1
-            if self.audioChunkCount == 1 || self.audioChunkCount % 120 == 0 {
-                self.sendUpdate(.debug("audio chunks sent: \(self.audioChunkCount)"))
+            if let mixer {
+                mixer.append(data, from: source)
+            } else {
+                socket.sendAudio(data)
             }
-        }
-    }
+            let level = Self.audioLevel(for: data)
 
-    private func publishAudioLevelIfNeeded(for data: Data, from source: LiveInterpreterAudioSource) {
-        let level = Self.audioLevel(for: data)
+            Task { @MainActor [weak self, weak socket] in
+                guard let self, let socket else {
+                    return
+                }
 
-        audioLevelQueue.async { [weak self] in
-            guard let self else {
-                return
-            }
-
-            let now = CFAbsoluteTimeGetCurrent()
-            let lastUpdate = self.lastAudioLevelUpdate[source] ?? 0
-            guard now - lastUpdate >= 0.08 else {
-                return
-            }
-
-            self.lastAudioLevelUpdate[source] = now
-            self.sendUpdate(.audioLevel(source, level))
-        }
-    }
-
-    private func handle(_ event: RealtimeTranslationEvent, from targetLanguage: RealtimeTranslationLanguage) {
-        stateQueue.async { [weak self] in
-            guard let self else {
-                return
-            }
-
-            switch event {
-            case .inputTranscriptDelta(let delta):
-                self.sendUpdate(.debug("input transcript delta"))
-                self.sourceTranscript = Self.trimmedTail(self.sourceTranscript + delta, limit: 800)
-                self.sendUpdate(.sourceTranscript(Self.lineBrokenSentences(in: self.sourceTranscript)))
-                self.requestProvisionalSubtitle(targetLanguage: targetLanguage)
-            case .outputTranscriptDelta(let delta):
-                self.sendUpdate(.debug("output transcript delta"))
-                self.translatedSubtitle = Self.trimmedTail(self.translatedSubtitle + delta, limit: 1_500)
-                self.provisionalSubtitle = ""
-                self.lastOfficialSubtitleUpdateTime = CFAbsoluteTimeGetCurrent()
-                self.publishSubtitle(preferProvisional: false)
-            case .status(let message):
-                self.sendUpdate(.status(message))
-            case .debug(let message):
-                self.sendUpdate(.debug(message))
-            case .error(let message):
-                self.sendUpdate(.error(message))
+                self.publishAudioActivity(
+                    source: source,
+                    level: level,
+                    socket: socket,
+                    generation: generation
+                )
             }
         }
     }
 
-    private func requestProvisionalSubtitle(targetLanguage: RealtimeTranslationLanguage) {
+    private func makeCaptureFailureHandler(
+        socket: RealtimeTranslationSocket,
+        generation: Int
+    ) -> @Sendable (Error) -> Void {
+        { [weak self, weak socket] error in
+            guard let socket else {
+                return
+            }
+
+            Task { @MainActor [weak self, weak socket] in
+                guard let self, let socket else {
+                    return
+                }
+
+                self.handleTerminalFailure(
+                    error.localizedDescription,
+                    socket: socket,
+                    generation: generation,
+                    closeSocket: true
+                )
+            }
+        }
+    }
+
+    private func publishAudioActivity(
+        source: LiveInterpreterAudioSource,
+        level: Double,
+        socket: RealtimeTranslationSocket,
+        generation: Int
+    ) {
+        guard isCurrentSession(socket, generation: generation) else {
+            return
+        }
+
+        audioChunkCount += 1
+        if audioChunkCount == 1 || audioChunkCount % 120 == 0 {
+            sendUpdate(.debug("audio chunks sent: \(audioChunkCount)"))
+        }
+
+        let now = CFAbsoluteTimeGetCurrent()
+        let lastUpdate = lastAudioLevelUpdate[source] ?? 0
+        guard now - lastUpdate >= 0.08 else {
+            return
+        }
+
+        lastAudioLevelUpdate[source] = now
+        sendUpdate(.audioLevel(source, level))
+    }
+
+    private func handle(
+        _ event: RealtimeTranslationEvent,
+        from targetLanguage: RealtimeTranslationLanguage,
+        socket: RealtimeTranslationSocket,
+        generation: Int
+    ) {
+        guard isCurrentSession(socket, generation: generation) else {
+            return
+        }
+
+        switch event {
+        case .inputTranscriptDelta(let delta):
+            sourceTranscript = Self.trimmedTail(sourceTranscript + delta, limit: 50_000)
+            sourceTranscriptSinceOfficialOutput = Self.trimmedTail(
+                sourceTranscriptSinceOfficialOutput + delta,
+                limit: 2_000
+            )
+            let sourceDisplay = Self.trimmedTail(sourceTranscript, limit: 800)
+            sendUpdate(.sourceTranscript(Self.lineBrokenSentences(in: sourceDisplay)))
+            requestProvisionalSubtitle(
+                targetLanguage: targetLanguage,
+                socket: socket,
+                generation: generation
+            )
+        case .outputTranscriptDelta(let delta):
+            translatedSubtitle = Self.trimmedTail(translatedSubtitle + delta, limit: 1_500)
+            provisionalSubtitle = ""
+            sourceTranscriptSinceOfficialOutput = ""
+            provisionalSubtitleTranslator.cancel()
+            lastOfficialSubtitleUpdateTime = CFAbsoluteTimeGetCurrent()
+            publishSubtitle(preferProvisional: false)
+        case .status(let message):
+            sendUpdate(.status(message))
+        case .debug(let message):
+            sendUpdate(.debug(message))
+        }
+    }
+
+    private func requestProvisionalSubtitle(
+        targetLanguage: RealtimeTranslationLanguage,
+        socket: RealtimeTranslationSocket,
+        generation: Int
+    ) {
         provisionalSubtitleTranslator.submit(
-            sourceTranscript: sourceTranscript,
+            sourceTranscript: sourceTranscriptSinceOfficialOutput,
             targetLanguageCode: targetLanguage.code
         ) { [weak self] subtitle in
-            self?.stateQueue.async { [weak self] in
-                guard let self else {
+            Task { @MainActor [weak self, weak socket] in
+                guard let self, let socket else {
+                    return
+                }
+
+                guard self.isCurrentSession(socket, generation: generation) else {
                     return
                 }
 
@@ -253,7 +349,6 @@ final class LiveInterpreterService {
                 guard self.translatedSubtitle.isEmpty || officialAge > 0.65 else {
                     return
                 }
-
                 self.provisionalSubtitle = subtitle
                 self.publishSubtitle(preferProvisional: true)
             }
@@ -275,42 +370,113 @@ final class LiveInterpreterService {
     }
 
     private func resetTranscriptState() {
-        stateQueue.sync {
-            sourceTranscript = ""
-            translatedSubtitle = ""
-            provisionalSubtitle = ""
-            lastOfficialSubtitleUpdateTime = 0
-            audioChunkCount = 0
-            provisionalSubtitleTranslator.cancel()
-        }
+        sourceTranscript = ""
+        sourceTranscriptSinceOfficialOutput = ""
+        translatedSubtitle = ""
+        provisionalSubtitle = ""
+        lastOfficialSubtitleUpdateTime = 0
+        lastAudioLevelUpdate = [:]
+        audioChunkCount = 0
+        provisionalSubtitleTranslator.cancel()
         targetLanguageDisplayName = ""
     }
 
-    private func requestMicrophoneAccess() async throws {
-        switch AVCaptureDevice.authorizationStatus(for: .audio) {
-        case .authorized:
-            return
-        case .notDetermined:
-            let granted = await withCheckedContinuation { continuation in
-                AVCaptureDevice.requestAccess(for: .audio) { granted in
-                    continuation.resume(returning: granted)
-                }
-            }
-
-            if granted {
-                return
-            }
-
-            throw R2TransError.microphonePermissionDenied
-        default:
-            throw R2TransError.microphonePermissionDenied
+    private func ensureCurrentSession(
+        _ socket: RealtimeTranslationSocket,
+        generation: Int
+    ) throws {
+        try Task.checkCancellation()
+        guard isCurrentSession(socket, generation: generation) else {
+            throw CancellationError()
         }
     }
 
-    private func sendUpdate(_ update: LiveInterpreterUpdate) {
-        Task { @MainActor in
-            onUpdate?(update)
+    private func isCurrentSession(_ socket: RealtimeTranslationSocket, generation: Int) -> Bool {
+        sessionGeneration == generation
+            && translationSession === socket
+            && (isStarting || isRunning)
+    }
+
+    private func cleanupFailedStart(
+        socket: RealtimeTranslationSocket,
+        generation: Int,
+        microphoneCapture: MicrophonePCM16AudioCapture?,
+        systemAudioCapture: SystemPCM16AudioCapture?,
+        audioMixer: PCM16AudioMixer?
+    ) {
+        audioMixer?.stop()
+        microphoneCapture?.stop()
+        systemAudioCapture?.stop()
+
+        guard sessionGeneration == generation, translationSession === socket else {
+            socket.closeGracefully()
+            return
         }
+
+        sessionGeneration &+= 1
+        isStarting = false
+        isRunning = false
+        if self.microphoneCapture === microphoneCapture {
+            self.microphoneCapture = nil
+        }
+        if self.systemAudioCapture === systemAudioCapture {
+            self.systemAudioCapture = nil
+        }
+        if self.audioMixer === audioMixer {
+            self.audioMixer = nil
+        }
+        translationSession = nil
+        provisionalSubtitleTranslator.cancel()
+        retainWhileClosing(socket)
+    }
+
+    private func handleTerminalFailure(
+        _ message: String,
+        socket: RealtimeTranslationSocket,
+        generation: Int,
+        closeSocket: Bool
+    ) {
+        guard isCurrentSession(socket, generation: generation) else {
+            return
+        }
+
+        sessionGeneration &+= 1
+        isStarting = false
+        isRunning = false
+        stopAudioCapture()
+        translationSession = nil
+        provisionalSubtitleTranslator.cancel()
+        if closeSocket {
+            retainWhileClosing(socket)
+        }
+
+        sendUpdate(.audioLevel(.microphone, 0))
+        sendUpdate(.audioLevel(.systemAudio, 0))
+        sendUpdate(.runningStateChanged(false))
+        sendUpdate(.error(message))
+    }
+
+    private func stopAudioCapture() {
+        let audioMixer = self.audioMixer
+        let microphoneCapture = self.microphoneCapture
+        let systemAudioCapture = self.systemAudioCapture
+        self.audioMixer = nil
+        self.microphoneCapture = nil
+        self.systemAudioCapture = nil
+        audioMixer?.stop()
+        microphoneCapture?.stop()
+        systemAudioCapture?.stop()
+    }
+
+    private func retainWhileClosing(_ socket: RealtimeTranslationSocket) {
+        if !closingTranslationSessions.contains(where: { $0 === socket }) {
+            closingTranslationSessions.append(socket)
+        }
+        socket.closeGracefully()
+    }
+
+    private func sendUpdate(_ update: LiveInterpreterUpdate) {
+        onUpdate?(update)
     }
 
     private static func trimmedTail(_ value: String, limit: Int) -> String {
@@ -352,7 +518,7 @@ final class LiveInterpreterService {
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private static func audioLevel(for data: Data) -> Double {
+    nonisolated private static func audioLevel(for data: Data) -> Double {
         let sampleCount = data.count / 2
         guard sampleCount > 0 else {
             return 0
@@ -390,7 +556,7 @@ private final class ProvisionalLiveSubtitleTranslator: @unchecked Sendable {
     func submit(
         sourceTranscript: String,
         targetLanguageCode: String,
-        onResult: @escaping (String) -> Void
+        onResult: @escaping @Sendable (String) -> Void
     ) {
         let text = Self.translationWindow(from: sourceTranscript)
         guard Self.shouldTranslate(text) else {
@@ -428,7 +594,7 @@ private final class ProvisionalLiveSubtitleTranslator: @unchecked Sendable {
         }
     }
 
-    private func scheduleNextTranslation(onResult: @escaping (String) -> Void) {
+    private func scheduleNextTranslation(onResult: @escaping @Sendable (String) -> Void) {
         scheduledTask?.cancel()
 
         let now = CFAbsoluteTimeGetCurrent()
@@ -451,7 +617,7 @@ private final class ProvisionalLiveSubtitleTranslator: @unchecked Sendable {
         }
     }
 
-    private func startTranslation(onResult: @escaping (String) -> Void) {
+    private func startTranslation(onResult: @escaping @Sendable (String) -> Void) {
         guard !inFlight, Self.isMeaningfullyDifferent(latestText, from: lastRequestedText) else {
             return
         }
@@ -519,7 +685,7 @@ private final class ProvisionalLiveSubtitleTranslator: @unchecked Sendable {
     }
 }
 
-enum LiveInterpreterUpdate {
+enum LiveInterpreterUpdate: Sendable {
     case runningStateChanged(Bool)
     case status(String)
     case sourceTranscript(String)
@@ -529,12 +695,12 @@ enum LiveInterpreterUpdate {
     case error(String)
 }
 
-enum LiveInterpreterAudioSource: Hashable {
+enum LiveInterpreterAudioSource: Hashable, Sendable {
     case microphone
     case systemAudio
 }
 
-enum LiveInterpreterSystemAudioTarget: Hashable {
+enum LiveInterpreterSystemAudioTarget: Hashable, Sendable {
     case allSystemAudio
     case application(LiveInterpreterApplicationAudioTarget)
 
@@ -548,7 +714,7 @@ enum LiveInterpreterSystemAudioTarget: Hashable {
     }
 }
 
-struct LiveInterpreterApplicationAudioTarget: Hashable {
+struct LiveInterpreterApplicationAudioTarget: Hashable, Sendable {
     let processID: pid_t
     let appName: String
     let bundleIdentifier: String?
@@ -558,7 +724,7 @@ struct LiveInterpreterApplicationAudioTarget: Hashable {
     }
 }
 
-enum LiveInterpreterInputSource: String, CaseIterable {
+enum LiveInterpreterInputSource: String, CaseIterable, Sendable {
     case microphone
     case systemAudio
     case microphoneAndSystemAudio
@@ -593,380 +759,114 @@ enum LiveInterpreterInputSource: String, CaseIterable {
     }
 }
 
-private final class MicrophoneAudioStreamer {
-    private let engine = AVAudioEngine()
-    private var converter = PCM16AudioConverter()
-    private var onAudioData: ((Data) -> Void)?
-
-    func start(onAudioData: @escaping (Data) -> Void) throws {
-        stop()
-
-        self.onAudioData = onAudioData
-
-        let inputNode = engine.inputNode
-        let inputFormat = inputNode.inputFormat(forBus: 0)
-        guard inputFormat.channelCount > 0 else {
-            throw R2TransError.microphoneUnavailable
-        }
-
-        converter = PCM16AudioConverter()
-
-        inputNode.installTap(onBus: 0, bufferSize: 2_048, format: inputFormat) { [weak self] buffer, _ in
-            guard let audioData = self?.convert(buffer), !audioData.isEmpty else {
-                return
-            }
-
-            self?.onAudioData?(audioData)
-        }
-
-        engine.prepare()
-        try engine.start()
+private final class RealtimeTranslationSocket: @unchecked Sendable {
+    private enum State {
+        case idle
+        case connecting
+        case ready
+        case closing
+        case closed
     }
 
-    func stop() {
-        if engine.isRunning {
-            engine.inputNode.removeTap(onBus: 0)
-            engine.stop()
-        }
-
-        onAudioData = nil
-        converter = PCM16AudioConverter()
-    }
-
-    private func convert(_ buffer: AVAudioPCMBuffer) -> Data? {
-        converter.convert(buffer)
-    }
-}
-
-private final class SystemAudioStreamer: NSObject, SCStreamOutput, SCStreamDelegate {
-    private let sampleQueue = DispatchQueue(label: "R2Trans.SystemAudioStreamer.samples")
-    private var stream: SCStream?
-    private var converter = PCM16AudioConverter()
-    private var onAudioData: ((Data) -> Void)?
-
-    func start(
-        target: LiveInterpreterSystemAudioTarget,
-        onAudioData: @escaping (Data) -> Void
-    ) async throws {
-        stop()
-
-        guard #available(macOS 13.0, *) else {
-            throw R2TransError.systemAudioUnavailable
-        }
-
-        self.onAudioData = onAudioData
-        converter = PCM16AudioConverter()
-
-        do {
-            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-            guard let display = content.displays.first else {
-                throw R2TransError.systemAudioUnavailable
-            }
-
-            let filter = try Self.contentFilter(for: target, content: content, display: display)
-
-            let configuration = SCStreamConfiguration()
-            configuration.width = 2
-            configuration.height = 2
-            configuration.minimumFrameInterval = CMTime(value: 1, timescale: 2)
-            configuration.queueDepth = 3
-            configuration.capturesAudio = true
-            configuration.sampleRate = 24_000
-            configuration.channelCount = 1
-            configuration.excludesCurrentProcessAudio = true
-            configuration.showsCursor = false
-
-            let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
-            try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: sampleQueue)
-            self.stream = stream
-            try await stream.startCapture()
-        } catch let error as R2TransError {
-            self.onAudioData = nil
-            throw error
-        } catch {
-            self.onAudioData = nil
-            throw R2TransError.systemAudioUnavailable
-        }
-    }
-
-    func stop() {
-        let stream = self.stream
-        self.stream = nil
-        onAudioData = nil
-        converter = PCM16AudioConverter()
-
-        if let stream {
-            stream.stopCapture { _ in }
-        }
-    }
-
-    func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
-        guard type == .audio, CMSampleBufferDataIsReady(sampleBuffer) else {
-            return
-        }
-
-        guard let audioData = converter.convert(sampleBuffer), !audioData.isEmpty else {
-            return
-        }
-
-        onAudioData?(audioData)
-    }
-
-    func stream(_ stream: SCStream, didStopWithError error: Error) {
-        onAudioData = nil
-    }
-
-    private static func contentFilter(
-        for target: LiveInterpreterSystemAudioTarget,
-        content: SCShareableContent,
-        display: SCDisplay
-    ) throws -> SCContentFilter {
-        switch target {
-        case .allSystemAudio:
-            let currentApplication = content.applications.first { application in
-                application.processID == getpid()
-            }
-            let excludedApplications = currentApplication.map { [$0] } ?? []
-            return SCContentFilter(
-                display: display,
-                excludingApplications: excludedApplications,
-                exceptingWindows: []
-            )
-        case .application(let targetApplication):
-            guard let application = Self.matchingApplication(for: targetApplication, in: content.applications) else {
-                throw R2TransError.systemAudioUnavailable
-            }
-
-            return SCContentFilter(
-                display: display,
-                including: [application],
-                exceptingWindows: []
-            )
-        }
-    }
-
-    private static func matchingApplication(
-        for target: LiveInterpreterApplicationAudioTarget,
-        in applications: [SCRunningApplication]
-    ) -> SCRunningApplication? {
-        if let application = applications.first(where: { $0.processID == target.processID }) {
-            return application
-        }
-
-        if
-            let bundleIdentifier = target.bundleIdentifier,
-            let application = applications.first(where: { $0.bundleIdentifier == bundleIdentifier })
-        {
-            return application
-        }
-
-        return applications.first { $0.applicationName == target.appName }
-    }
-}
-
-private final class PCM16AudioConverter {
-    private let outputFormat = AVAudioFormat(
-        commonFormat: .pcmFormatInt16,
-        sampleRate: 24_000,
-        channels: 1,
-        interleaved: true
-    )!
-    private var converter: AVAudioConverter?
-    private var inputFormat: AVAudioFormat?
-
-    func convert(_ sampleBuffer: CMSampleBuffer) -> Data? {
-        guard
-            let formatDescription = CMSampleBufferGetFormatDescription(sampleBuffer),
-            let streamDescriptionPointer = CMAudioFormatDescriptionGetStreamBasicDescription(formatDescription)
-        else {
-            return nil
-        }
-
-        var streamDescription = streamDescriptionPointer.pointee
-        guard let inputFormat = AVAudioFormat(streamDescription: &streamDescription) else {
-            return nil
-        }
-
-        let frameCount = CMSampleBufferGetNumSamples(sampleBuffer)
-        guard
-            frameCount > 0,
-            let inputBuffer = AVAudioPCMBuffer(
-                pcmFormat: inputFormat,
-                frameCapacity: AVAudioFrameCount(frameCount)
-            )
-        else {
-            return nil
-        }
-
-        inputBuffer.frameLength = AVAudioFrameCount(frameCount)
-        let status = CMSampleBufferCopyPCMDataIntoAudioBufferList(
-            sampleBuffer,
-            at: 0,
-            frameCount: Int32(frameCount),
-            into: inputBuffer.mutableAudioBufferList
-        )
-
-        guard status == noErr else {
-            return nil
-        }
-
-        return convert(inputBuffer)
-    }
-
-    func convert(_ buffer: AVAudioPCMBuffer) -> Data? {
-        guard let converter = converter(for: buffer.format) else {
-            return nil
-        }
-
-        guard let outputBuffer = AVAudioPCMBuffer(
-            pcmFormat: outputFormat,
-            frameCapacity: AVAudioFrameCount(Double(buffer.frameLength) * outputFormat.sampleRate / buffer.format.sampleRate) + 32
-        ) else {
-            return nil
-        }
-
-        var didProvideInput = false
-        var conversionError: NSError?
-
-        converter.convert(to: outputBuffer, error: &conversionError) { _, status in
-            if didProvideInput {
-                status.pointee = .noDataNow
-                return nil
-            }
-
-            didProvideInput = true
-            status.pointee = .haveData
-            return buffer
-        }
-
-        guard conversionError == nil, outputBuffer.frameLength > 0 else {
-            return nil
-        }
-
-        let audioBuffer = outputBuffer.audioBufferList.pointee.mBuffers
-        guard let dataPointer = audioBuffer.mData else {
-            return nil
-        }
-
-        return Data(bytes: dataPointer, count: Int(audioBuffer.mDataByteSize))
-    }
-
-    private func converter(for format: AVAudioFormat) -> AVAudioConverter? {
-        if inputFormat == format, let converter {
-            return converter
-        }
-
-        guard let converter = AVAudioConverter(from: format, to: outputFormat) else {
-            return nil
-        }
-
-        converter.channelMap = [0]
-        inputFormat = format
-        self.converter = converter
-        return converter
-    }
-}
-
-private final class RealtimeTranslationSocket {
     private let targetLanguage: RealtimeTranslationLanguage
     private let session = URLSession(configuration: .default)
-    private let sendQueue: DispatchQueue
-    private let onEvent: (RealtimeTranslationLanguage, RealtimeTranslationEvent) -> Void
-    private let onError: (String) -> Void
-    private let onClosed: (RealtimeTranslationSocket) -> Void
+    private let queue: DispatchQueue
+    private let onEvent: @Sendable (
+        RealtimeTranslationSocket,
+        RealtimeTranslationLanguage,
+        RealtimeTranslationEvent
+    ) -> Void
+    private let onTerminalFailure: @Sendable (RealtimeTranslationSocket, String) -> Void
+    private let onClosed: @Sendable (RealtimeTranslationSocket) -> Void
+    private var state = State.idle
     private var task: URLSessionWebSocketTask?
-    private var isDisconnected = false
-    private var isClosing = false
-    private var closeFallbackWorkItem: DispatchWorkItem?
+    private var readyContinuation: CheckedContinuation<Void, Error>?
+    private var readyTimeoutWorkItem: DispatchWorkItem?
+    private var closeTimeoutWorkItem: DispatchWorkItem?
 
     init(
         targetLanguage: RealtimeTranslationLanguage,
-        onEvent: @escaping (RealtimeTranslationLanguage, RealtimeTranslationEvent) -> Void,
-        onError: @escaping (String) -> Void,
-        onClosed: @escaping (RealtimeTranslationSocket) -> Void
+        onEvent: @escaping @Sendable (
+            RealtimeTranslationSocket,
+            RealtimeTranslationLanguage,
+            RealtimeTranslationEvent
+        ) -> Void,
+        onTerminalFailure: @escaping @Sendable (RealtimeTranslationSocket, String) -> Void,
+        onClosed: @escaping @Sendable (RealtimeTranslationSocket) -> Void
     ) {
         self.targetLanguage = targetLanguage
         self.onEvent = onEvent
-        self.onError = onError
+        self.onTerminalFailure = onTerminalFailure
         self.onClosed = onClosed
-        self.sendQueue = DispatchQueue(label: "R2Trans.RealtimeTranslationSocket.\(targetLanguage.apiLanguageCode)")
+        self.queue = DispatchQueue(label: "R2Trans.RealtimeTranslationSocket.\(targetLanguage.apiLanguageCode)")
     }
 
-    func connect(apiKey: String) {
+    func connect(apiKey: String) async throws {
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                queue.async { [weak self] in
+                    self?.startConnection(apiKey: apiKey, continuation: continuation)
+                }
+            }
+        } onCancel: { [weak self] in
+            self?.closeGracefully()
+        }
+    }
+
+    func sendAudio(_ audioData: Data) {
+        queue.async { [weak self] in
+            guard let self, self.state == .ready else {
+                return
+            }
+
+            self.sendJSONLocked([
+                "type": "session.input_audio_buffer.append",
+                "audio": audioData.base64EncodedString()
+            ])
+        }
+    }
+
+    func closeGracefully() {
+        queue.async { [weak self] in
+            self?.beginCloseLocked()
+        }
+    }
+
+    private func startConnection(apiKey: String, continuation: CheckedContinuation<Void, Error>) {
+        guard state == .idle else {
+            continuation.resume(throwing: CancellationError())
+            return
+        }
+
+        state = .connecting
+        readyContinuation = continuation
+
         var request = URLRequest(url: URL(string: "wss://api.openai.com/v1/realtime/translations?model=gpt-realtime-translate")!)
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.setValue("r2trans-local-user", forHTTPHeaderField: "OpenAI-Safety-Identifier")
+        request.setValue(OpenAISafetyIdentifier.value, forHTTPHeaderField: "OpenAI-Safety-Identifier")
 
         let task = session.webSocketTask(with: request)
         self.task = task
         task.resume()
-        onEvent(targetLanguage, .debug("socket started: \(targetLanguage.apiLanguageCode)"))
-        sendSessionUpdate()
-        receiveNextMessage()
+        emit(.debug("socket started: \(targetLanguage.apiLanguageCode)"))
+        scheduleReadyTimeoutLocked()
+        receiveNextLocked()
     }
 
-    func sendAudio(_ base64Audio: String) {
-        guard !isClosing else {
-            return
-        }
-
-        sendJSON([
-            "type": "session.input_audio_buffer.append",
-            "audio": base64Audio
-        ])
-    }
-
-    func closeGracefully() {
-        guard !isDisconnected else {
-            onClosed(self)
-            return
-        }
-
-        guard task != nil else {
-            finishClosed()
-            return
-        }
-
-        guard !isClosing else {
-            return
-        }
-
-        isClosing = true
-        sendJSON(["type": "session.close"], allowWhileClosing: true)
-
-        let fallback = DispatchWorkItem { [weak self] in
-            guard let self, self.isClosing, !self.isDisconnected else {
+    private func scheduleReadyTimeoutLocked() {
+        let timeout = DispatchWorkItem { [weak self] in
+            guard let self, self.state == .connecting else {
                 return
             }
 
-            self.onEvent(self.targetLanguage, .debug("session.close timed out"))
-            self.finishClosed()
+            self.failLocked("Realtime translation connection timed out.")
         }
-        closeFallbackWorkItem = fallback
-        sendQueue.asyncAfter(deadline: .now() + 5, execute: fallback)
+        readyTimeoutWorkItem = timeout
+        queue.asyncAfter(deadline: .now() + 15, execute: timeout)
     }
 
-    private func disconnect() {
-        isDisconnected = true
-        isClosing = false
-        closeFallbackWorkItem?.cancel()
-        closeFallbackWorkItem = nil
-        task?.cancel(with: .goingAway, reason: nil)
-        task = nil
-        session.invalidateAndCancel()
-    }
-
-    private func finishClosed() {
-        guard !isDisconnected else {
-            return
-        }
-
-        disconnect()
-        onClosed(self)
-    }
-
-    private func sendSessionUpdate() {
-        sendJSON([
+    private func sendSessionUpdateLocked() {
+        sendJSONLocked([
             "type": "session.update",
             "session": [
                 "audio": [
@@ -978,53 +878,70 @@ private final class RealtimeTranslationSocket {
         ])
     }
 
-    private func sendJSON(_ object: [String: Any], allowWhileClosing: Bool = false) {
+    private func sendJSONLocked(_ object: [String: Any]) {
         guard
             let task,
             let data = try? JSONSerialization.data(withJSONObject: object),
             let json = String(data: data, encoding: .utf8)
         else {
+            failLocked("Unable to encode a Realtime translation request.")
             return
         }
 
-        sendQueue.async { [weak self] in
-            guard
-                let self,
-                !self.isDisconnected,
-                allowWhileClosing || !self.isClosing
-            else {
+        task.send(.string(json)) { [weak self] error in
+            guard let error else {
                 return
             }
 
-            task.send(.string(json)) { error in
-                if let error {
-                    self.onError(error.localizedDescription)
+            self?.queue.async { [weak self] in
+                guard let self else {
+                    return
                 }
-            }
-        }
-    }
 
-    private func receiveNextMessage() {
-        task?.receive { [weak self] result in
-            guard let self, !self.isDisconnected else {
-                return
-            }
-
-            switch result {
-            case .success(let message):
-                self.handle(message)
-                self.receiveNextMessage()
-            case .failure(let error):
-                if self.isClosing {
-                    self.finishClosed()
+                if self.state == .closing {
+                    self.finishClosedLocked()
                 } else {
-                    self.onError(error.localizedDescription)
+                    self.failLocked(error.localizedDescription)
                 }
             }
         }
     }
 
-    private func handle(_ message: URLSessionWebSocketTask.Message) {
+    private func receiveNextLocked() {
+        guard let task, state != .closed else {
+            return
+        }
+
+        task.receive { [weak self] result in
+            self?.queue.async { [weak self] in
+                self?.handleReceiveLocked(result)
+            }
+        }
+    }
+
+    private func handleReceiveLocked(
+        _ result: Result<URLSessionWebSocketTask.Message, Error>
+    ) {
+        guard state != .closed else {
+            return
+        }
+
+        switch result {
+        case .success(let message):
+            handleMessageLocked(message)
+            if state != .closed {
+                receiveNextLocked()
+            }
+        case .failure(let error):
+            if state == .closing {
+                finishClosedLocked()
+            } else {
+                failLocked(error.localizedDescription)
+            }
+        }
+    }
+
+    private func handleMessageLocked(_ message: URLSessionWebSocketTask.Message) {
         let data: Data?
 
         switch message {
@@ -1036,11 +953,8 @@ private final class RealtimeTranslationSocket {
             data = nil
         }
 
-        guard let data else {
-            return
-        }
-
         guard
+            let data,
             let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             let type = object["type"] as? String
         else {
@@ -1048,28 +962,124 @@ private final class RealtimeTranslationSocket {
         }
 
         switch type {
+        case "session.created":
+            guard state == .connecting else {
+                return
+            }
+            emit(.debug(type))
+            sendSessionUpdateLocked()
+        case "session.updated":
+            guard state == .connecting else {
+                return
+            }
+            state = .ready
+            readyTimeoutWorkItem?.cancel()
+            readyTimeoutWorkItem = nil
+            let continuation = readyContinuation
+            readyContinuation = nil
+            emit(.debug(type))
+            continuation?.resume()
         case "session.input_transcript.delta":
-            if let delta = object["delta"] as? String {
-                onEvent(targetLanguage, .inputTranscriptDelta(delta))
+            guard state == .ready, let delta = object["delta"] as? String else {
+                return
             }
+            emit(.inputTranscriptDelta(delta))
         case "session.output_transcript.delta":
-            if let delta = object["delta"] as? String {
-                onEvent(targetLanguage, .outputTranscriptDelta(delta))
+            guard state == .ready, let delta = object["delta"] as? String else {
+                return
             }
-        case "session.created", "session.updated":
-            onEvent(targetLanguage, .debug(type))
+            emit(.outputTranscriptDelta(delta))
         case "session.closed":
-            onEvent(targetLanguage, .debug(type))
-            finishClosed()
+            emit(.debug(type))
+            if state == .closing {
+                finishClosedLocked()
+            } else {
+                failLocked("Realtime translation session closed unexpectedly.")
+            }
         case "error", "session.error":
-            onEvent(targetLanguage, .error(Self.errorMessage(from: object)))
+            failLocked(Self.errorMessage(from: object))
         default:
             if type.lowercased().contains("error") {
-                onEvent(targetLanguage, .error(Self.errorMessage(from: object)))
+                failLocked(Self.errorMessage(from: object))
             } else {
-                onEvent(targetLanguage, .debug(type))
+                emit(.debug(type))
             }
         }
+    }
+
+    private func beginCloseLocked() {
+        switch state {
+        case .idle:
+            state = .closed
+            session.invalidateAndCancel()
+            onClosed(self)
+        case .connecting:
+            finishClosedLocked()
+        case .ready:
+            state = .closing
+            sendJSONLocked(["type": "session.close"])
+
+            let timeout = DispatchWorkItem { [weak self] in
+                guard let self, self.state == .closing else {
+                    return
+                }
+
+                self.emit(.debug("session.close timed out"))
+                self.finishClosedLocked()
+            }
+            closeTimeoutWorkItem = timeout
+            queue.asyncAfter(deadline: .now() + 5, execute: timeout)
+        case .closing:
+            return
+        case .closed:
+            // The owner may retain a socket immediately after an asynchronous failure.
+            // Re-notify it so that retention can be released deterministically.
+            onClosed(self)
+        }
+    }
+
+    private func failLocked(_ message: String) {
+        guard state != .closed else {
+            return
+        }
+
+        let wasConnecting = state == .connecting
+        let continuation = readyContinuation
+        readyContinuation = nil
+        closeTransportLocked()
+        continuation?.resume(throwing: RealtimeTranslationSocketError(message: message))
+
+        if !wasConnecting {
+            onTerminalFailure(self, message)
+        }
+        onClosed(self)
+    }
+
+    private func finishClosedLocked() {
+        guard state != .closed else {
+            return
+        }
+
+        let continuation = readyContinuation
+        readyContinuation = nil
+        closeTransportLocked()
+        continuation?.resume(throwing: CancellationError())
+        onClosed(self)
+    }
+
+    private func closeTransportLocked() {
+        state = .closed
+        readyTimeoutWorkItem?.cancel()
+        readyTimeoutWorkItem = nil
+        closeTimeoutWorkItem?.cancel()
+        closeTimeoutWorkItem = nil
+        task?.cancel(with: .goingAway, reason: nil)
+        task = nil
+        session.invalidateAndCancel()
+    }
+
+    private func emit(_ event: RealtimeTranslationEvent) {
+        onEvent(self, targetLanguage, event)
     }
 
     private static func errorMessage(from object: [String: Any]) -> String {
@@ -1088,15 +1098,22 @@ private final class RealtimeTranslationSocket {
     }
 }
 
-private enum RealtimeTranslationEvent {
+private struct RealtimeTranslationSocketError: LocalizedError, Sendable {
+    let message: String
+
+    var errorDescription: String? {
+        message
+    }
+}
+
+private enum RealtimeTranslationEvent: Sendable {
     case inputTranscriptDelta(String)
     case outputTranscriptDelta(String)
     case status(String)
     case debug(String)
-    case error(String)
 }
 
-private struct RealtimeTranslationLanguage: Hashable {
+private struct RealtimeTranslationLanguage: Hashable, Sendable {
     let code: String
     let displayName: String
     

@@ -46,6 +46,8 @@ final class LiveInterpreterWindowController: NSWindowController, NSWindowDelegat
     private let keepOnTopButton = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     private let billingNoteLabel = NSTextField(labelWithString: "")
     private var isStarting = false
+    private var startTask: Task<Void, Never>?
+    private var startGeneration = 0
     private var systemAudioTargets: [LiveInterpreterSystemAudioTarget] = [.allSystemAudio]
 
     init() {
@@ -358,8 +360,8 @@ final class LiveInterpreterWindowController: NSWindowController, NSWindowDelegat
     }
 
     private func applyRunningState(_ isRunning: Bool) {
-        startStopButton.title = isStarting ? AppText.text(.liveInterpreterConnecting) : (isRunning ? AppText.text(.stop) : AppText.text(.start))
-        startStopButton.isEnabled = !isStarting
+        startStopButton.title = isStarting || isRunning ? AppText.text(.stop) : AppText.text(.start)
+        startStopButton.isEnabled = true
         clearButton.isEnabled = !isRunning && !isStarting
         inputSourcePopup.isEnabled = !isRunning && !isStarting
         audioApplicationPopup.isEnabled = !isRunning && !isStarting
@@ -374,8 +376,8 @@ final class LiveInterpreterWindowController: NSWindowController, NSWindowDelegat
     }
 
     @objc private func toggleListening() {
-        if service.isRunning {
-            service.stop()
+        if service.isRunning || isStarting {
+            cancelStartAndStop()
             return
         }
 
@@ -383,29 +385,61 @@ final class LiveInterpreterWindowController: NSWindowController, NSWindowDelegat
             return
         }
 
-        Task {
+        let inputSource = LiveInterpreterInputSource.allCases[inputSourcePopup.indexOfSelectedItem]
+        let targetLanguage = SupportedLanguage.all[outputLanguagePopup.indexOfSelectedItem]
+        let systemAudioTarget = selectedSystemAudioTarget()
+        startGeneration &+= 1
+        let generation = startGeneration
+        isStarting = true
+        applyRunningState(false)
+        resetAudioMeters()
+        refreshMeterAvailability()
+        debugLabel.stringValue = ""
+
+        startTask = Task { [weak self] in
+            guard let self else {
+                return
+            }
+
             do {
-                let inputSource = LiveInterpreterInputSource.allCases[inputSourcePopup.indexOfSelectedItem]
-                let targetLanguage = SupportedLanguage.all[outputLanguagePopup.indexOfSelectedItem]
-                isStarting = true
-                applyRunningState(false)
-                resetAudioMeters()
-                refreshMeterAvailability()
-                debugLabel.stringValue = ""
                 try await service.start(
                     inputSource: inputSource,
                     targetLanguageCode: targetLanguage.code,
-                    systemAudioTarget: selectedSystemAudioTarget()
+                    systemAudioTarget: systemAudioTarget
                 )
+                guard generation == startGeneration else {
+                    return
+                }
                 isStarting = false
+                startTask = nil
                 applyRunningState(service.isRunning)
-            } catch {
+            } catch is CancellationError {
+                guard generation == startGeneration else {
+                    return
+                }
                 isStarting = false
+                startTask = nil
+                applyRunningState(false)
+            } catch {
+                guard generation == startGeneration else {
+                    return
+                }
+                isStarting = false
+                startTask = nil
                 applyRunningState(false)
                 statusLabel.stringValue = AppText.text(.liveInterpreterError)
                 showError(error.localizedDescription)
             }
         }
+    }
+
+    private func cancelStartAndStop() {
+        startGeneration &+= 1
+        startTask?.cancel()
+        startTask = nil
+        isStarting = false
+        service.stop()
+        applyRunningState(false)
     }
 
     @objc private func clearTranscripts() {
@@ -693,7 +727,7 @@ final class LiveInterpreterWindowController: NSWindowController, NSWindowDelegat
     }
 
     func windowWillClose(_ notification: Notification) {
-        service.stop()
+        cancelStartAndStop()
         window?.level = .normal
     }
 }

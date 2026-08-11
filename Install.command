@@ -2,4 +2,4 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-"$ROOT_DIR/Scripts/install_app.sh"
+R2TRANS_ALLOW_ADHOC=1 "$ROOT_DIR/Scripts/install_app.sh"

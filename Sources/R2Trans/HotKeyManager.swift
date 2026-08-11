@@ -6,8 +6,9 @@ struct HotKey: Equatable {
     let modifiers: UInt32
 }
 
+@MainActor
 final class HotKeyManager {
-    private static let hotKeySignature = OSType(0x52545452)
+    nonisolated private static let hotKeySignature = OSType(0x52545452)
 
     private var eventHotKey: EventHotKeyRef?
     private var eventHandler: EventHandlerRef?

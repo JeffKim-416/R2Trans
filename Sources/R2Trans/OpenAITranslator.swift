@@ -1,6 +1,6 @@
 import Foundation
 
-final class OpenAITranslator {
+final class OpenAITranslator: Sendable {
     private let settings = AppSettings.shared
     private let session: URLSession
 
@@ -9,11 +9,12 @@ final class OpenAITranslator {
     }
 
     func translate(_ text: String) async throws -> String {
-        let translated = try await translate(
+        let translated = try await translateInChunks(
             text,
             instructions: makeInstructions(),
             model: settings.model,
-            maxOutputTokens: 2048
+            maximumChunkCharacters: TranslationRequestLimits.maximumInputCharactersPerRequest,
+            maximumOutputTokens: TranslationRequestLimits.maximumOutputTokens
         )
 
         guard let retryInstructions = autoDetectRetryInstructionsIfNeeded(
@@ -23,11 +24,12 @@ final class OpenAITranslator {
             return translated
         }
 
-        return try await translate(
+        return try await translateInChunks(
             text,
             instructions: retryInstructions,
             model: settings.model,
-            maxOutputTokens: 2048
+            maximumChunkCharacters: TranslationRequestLimits.maximumInputCharactersPerRequest,
+            maximumOutputTokens: TranslationRequestLimits.maximumOutputTokens
         )
     }
 
@@ -42,21 +44,63 @@ final class OpenAITranslator {
         Do not add explanations, labels, or quotation marks.
         """
 
-        return try await translate(
+        return try await translateInChunks(
             text,
             instructions: instructions,
             model: SupportedModel.defaultID,
-            maxOutputTokens: 512
+            maximumChunkCharacters: TranslationRequestLimits.maximumLiveInputCharactersPerRequest,
+            maximumOutputTokens: TranslationRequestLimits.maximumLiveOutputTokens
         )
     }
 
-    private func translate(
+    private func translateInChunks(
+        _ text: String,
+        instructions: String,
+        model: String,
+        maximumChunkCharacters: Int,
+        maximumOutputTokens: Int
+    ) async throws -> String {
+        let chunks = TranslationTextChunker.chunks(
+            text,
+            maximumCharacters: maximumChunkCharacters
+        )
+        var translatedText = ""
+
+        for chunk in chunks {
+            if chunk.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                translatedText += chunk.text
+            } else {
+                let outputTokenLimit = TranslationRequestLimits.outputTokenLimit(
+                    for: chunk.text,
+                    ceiling: maximumOutputTokens
+                )
+                translatedText += try await performTranslationRequest(
+                    chunk.text,
+                    instructions: instructions,
+                    model: model,
+                    maxOutputTokens: outputTokenLimit
+                )
+            }
+
+            translatedText += chunk.trailingSeparator
+        }
+
+        let result = translatedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !result.isEmpty else {
+            throw R2TransError.openAIResponseMissing
+        }
+
+        return result
+    }
+
+    private func performTranslationRequest(
         _ text: String,
         instructions: String,
         model: String,
         maxOutputTokens: Int
     ) async throws -> String {
-        let apiKey = KeychainStore.loadAPIKey().trimmingCharacters(in: .whitespacesAndNewlines)
+        let apiKey = try KeychainStore.loadAPIKeyOrThrow()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         guard !apiKey.isEmpty else {
             throw R2TransError.apiKeyMissing
         }
@@ -70,7 +114,10 @@ final class OpenAITranslator {
             model: model,
             instructions: instructions,
             input: text,
-            maxOutputTokens: maxOutputTokens
+            maxOutputTokens: maxOutputTokens,
+            reasoning: ResponsesReasoning(effort: "none"),
+            store: false,
+            safetyIdentifier: OpenAISafetyIdentifier.value
         )
 
         request.httpBody = try JSONEncoder.snakeCaseEncoder.encode(body)
@@ -98,14 +145,21 @@ final class OpenAITranslator {
             throw R2TransError.openAIRequestFailed(friendlyErrorMessage(statusCode: httpResponse.statusCode, apiMessage: message))
         }
 
-        let decoded = try JSONDecoder().decode(ResponsesResponse.self, from: data)
-        let translated = decoded.textOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+        let decoded: ResponsesResponse
 
-        guard !translated.isEmpty else {
-            throw R2TransError.openAIResponseMissing
+        do {
+            decoded = try JSONDecoder().decode(ResponsesResponse.self, from: data)
+        } catch {
+            throw R2TransError.openAIRequestFailed("OpenAI returned an invalid response.")
         }
 
-        return translated
+        do {
+            return try decoded.validatedTextOutput()
+        } catch ResponsesResponseValidationError.missingText {
+            throw R2TransError.openAIResponseMissing
+        } catch let validationError as ResponsesResponseValidationError {
+            throw R2TransError.openAIRequestFailed(validationError.localizedDescription)
+        }
     }
 
     private func makeInstructions() -> String {
@@ -277,42 +331,235 @@ private extension CharacterSet {
     static let r2TransLatin = CharacterSet(charactersIn: "A"..."Z").union(CharacterSet(charactersIn: "a"..."z"))
 }
 
-private struct ResponsesRequest: Encodable {
+struct ResponsesRequest: Encodable {
     let model: String
     let instructions: String
     let input: String
     let maxOutputTokens: Int
+    let reasoning: ResponsesReasoning
+    let store: Bool
+    let safetyIdentifier: String
 }
 
-private struct ResponsesResponse: Decodable {
+struct ResponsesReasoning: Encodable {
+    let effort: String
+}
+
+struct ResponsesResponse: Decodable {
+    let status: String?
+    let incompleteDetails: IncompleteDetails?
     let outputText: String?
     let output: [OutputItem]?
 
-    var textOutput: String {
-        if let outputText, !outputText.isEmpty {
-            return outputText
+    func validatedTextOutput() throws -> String {
+        guard status == "completed" else {
+            throw ResponsesResponseValidationError.responseNotCompleted(
+                status: status,
+                reason: incompleteDetails?.reason
+            )
         }
 
-        return output?
-            .flatMap { $0.content ?? [] }
-            .compactMap(\.text)
-            .joined(separator: "")
-            ?? ""
+        guard incompleteDetails == nil else {
+            throw ResponsesResponseValidationError.incompleteDetailsOnCompletedResponse(
+                reason: incompleteDetails?.reason
+            )
+        }
+
+        if let incompleteMessage = output?.first(where: {
+            $0.type == "message" && $0.status != "completed"
+        }) {
+            throw ResponsesResponseValidationError.outputItemNotCompleted(
+                status: incompleteMessage.status
+            )
+        }
+
+        let text: String
+
+        if let outputText, !outputText.isEmpty {
+            text = outputText
+        } else {
+            text = output?
+                .filter { $0.type == "message" }
+                .flatMap { $0.content ?? [] }
+                .filter { $0.type == "output_text" }
+                .compactMap(\.text)
+                .joined(separator: "")
+                ?? ""
+        }
+
+        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedText.isEmpty else {
+            throw ResponsesResponseValidationError.missingText
+        }
+
+        return trimmedText
     }
 
     private enum CodingKeys: String, CodingKey {
+        case status
+        case incompleteDetails = "incomplete_details"
         case outputText = "output_text"
         case output
     }
 }
 
-private struct OutputItem: Decodable {
+struct IncompleteDetails: Decodable, Equatable {
+    let reason: String?
+}
+
+struct OutputItem: Decodable {
+    let type: String?
+    let status: String?
     let content: [OutputContent]?
 }
 
-private struct OutputContent: Decodable {
+struct OutputContent: Decodable {
     let type: String?
     let text: String?
+}
+
+enum ResponsesResponseValidationError: Error, Equatable, LocalizedError {
+    case responseNotCompleted(status: String?, reason: String?)
+    case incompleteDetailsOnCompletedResponse(reason: String?)
+    case outputItemNotCompleted(status: String?)
+    case missingText
+
+    var errorDescription: String? {
+        switch self {
+        case .responseNotCompleted(let status, let reason):
+            return Self.incompleteMessage(status: status, reason: reason)
+        case .incompleteDetailsOnCompletedResponse(let reason):
+            return Self.incompleteMessage(status: "completed", reason: reason)
+        case .outputItemNotCompleted(let status):
+            return Self.incompleteMessage(status: status, reason: nil)
+        case .missingText:
+            return "OpenAI returned a completed response without translated text."
+        }
+    }
+
+    private static func incompleteMessage(status: String?, reason: String?) -> String {
+        let statusDescription = status ?? "missing"
+        let reasonDescription = reason.map { ", reason: \($0)" } ?? ""
+        return "OpenAI response was not completed (status: \(statusDescription)\(reasonDescription)). Partial output was discarded."
+    }
+}
+
+enum TranslationRequestLimits {
+    static let maximumInputCharactersPerRequest = 2_000
+    static let maximumLiveInputCharactersPerRequest = 320
+    static let maximumOutputTokens = 4_096
+    static let maximumLiveOutputTokens = 512
+    static let minimumOutputTokens = 256
+
+    static func outputTokenLimit(for text: String, ceiling: Int) -> Int {
+        let safeCeiling = max(1, ceiling)
+        let estimatedInputTokens = max(1, (text.utf8.count + 2) / 3)
+        let estimatedOutputTokens: Int
+
+        if estimatedInputTokens > (Int.max - minimumOutputTokens) / 2 {
+            estimatedOutputTokens = Int.max
+        } else {
+            estimatedOutputTokens = estimatedInputTokens * 2 + minimumOutputTokens
+        }
+
+        return min(safeCeiling, max(minimumOutputTokens, estimatedOutputTokens))
+    }
+}
+
+struct TranslationTextChunk: Equatable {
+    let text: String
+    let trailingSeparator: String
+}
+
+enum TranslationTextChunker {
+    private struct SplitPoint {
+        let contentEnd: String.Index
+        let consumedEnd: String.Index
+        let separator: String
+    }
+
+    static func chunks(_ text: String, maximumCharacters: Int) -> [TranslationTextChunk] {
+        precondition(maximumCharacters > 0)
+
+        guard !text.isEmpty else {
+            return [TranslationTextChunk(text: "", trailingSeparator: "")]
+        }
+
+        var chunks: [TranslationTextChunk] = []
+        var remaining = text[...]
+
+        while let hardEnd = remaining.index(
+            remaining.startIndex,
+            offsetBy: maximumCharacters,
+            limitedBy: remaining.endIndex
+        ), hardEnd < remaining.endIndex {
+            let candidate = remaining[..<hardEnd]
+            let minimumPreferredIndex = candidate.index(
+                candidate.startIndex,
+                offsetBy: maximumCharacters * 3 / 5
+            )
+            let splitPoint = preferredSplitPoint(
+                in: candidate,
+                minimumIndex: minimumPreferredIndex
+            ) ?? SplitPoint(
+                contentEnd: hardEnd,
+                consumedEnd: hardEnd,
+                separator: ""
+            )
+
+            chunks.append(
+                TranslationTextChunk(
+                    text: String(remaining[..<splitPoint.contentEnd]),
+                    trailingSeparator: splitPoint.separator
+                )
+            )
+            remaining = remaining[splitPoint.consumedEnd...]
+        }
+
+        if !remaining.isEmpty || chunks.isEmpty {
+            chunks.append(TranslationTextChunk(text: String(remaining), trailingSeparator: ""))
+        }
+
+        return chunks
+    }
+
+    private static func preferredSplitPoint(
+        in candidate: Substring,
+        minimumIndex: String.Index
+    ) -> SplitPoint? {
+        let separators = ["\r\n\r\n", "\n\n", "\r\n", "\n", ". ", "! ", "? ", "。", "！", "？", "\t", " "]
+
+        for separator in separators {
+            guard let range = candidate.range(of: separator, options: .backwards),
+                  range.upperBound >= minimumIndex else {
+                continue
+            }
+
+            switch separator {
+            case ". ", "! ", "? ":
+                let contentEnd = candidate.index(after: range.lowerBound)
+                return SplitPoint(
+                    contentEnd: contentEnd,
+                    consumedEnd: range.upperBound,
+                    separator: String(candidate[contentEnd..<range.upperBound])
+                )
+            case "。", "！", "？":
+                return SplitPoint(
+                    contentEnd: range.upperBound,
+                    consumedEnd: range.upperBound,
+                    separator: ""
+                )
+            default:
+                return SplitPoint(
+                    contentEnd: range.lowerBound,
+                    consumedEnd: range.upperBound,
+                    separator: String(candidate[range])
+                )
+            }
+        }
+
+        return nil
+    }
 }
 
 private struct OpenAIErrorEnvelope: Decodable {

@@ -14,7 +14,8 @@ Select text in the app you are already using, press the hotkey, and R2Trans repl
 - Lets you choose a translation style: Natural, Formal, Polite, Overly Deferential, or Nyang style for Korean output.
 - Can show a confirmation window before replacing the selected text.
 - Includes a Live Interpreter for translating microphone audio, system audio, or both.
-- Provides quick menu bar controls for translation mode, auto detect, confirmation, style, Live Interpreter, and Launch at Login.
+- Includes Live Transcription for displaying the same audio as realtime source-language captions without translation.
+- Provides quick menu bar controls for translation mode, auto detect, confirmation, style, Live Interpreter, Live Transcription, and Launch at Login.
 
 ## Installation
 
@@ -26,7 +27,7 @@ Select text in the app you are already using, press the hotkey, and R2Trans repl
 4. Launch `R2Trans` from `Applications`.
 5. Grant the macOS permissions requested by the app.
 
-If macOS shows an "unidentified developer" warning, open `System Settings > Privacy & Security`, allow R2Trans to run, then open the app again.
+New GitHub Releases are configured to publish only after Developer ID signing and notarization checks pass. If Gatekeeper reports that the app is damaged or cannot verify its developer, do not bypass the warning; download it again from the official Release and report the problem.
 
 ### Install from Source ZIP
 
@@ -38,7 +39,7 @@ If you downloaded the source code as a ZIP from GitHub, double-click `Install.co
 4. Wait for the Terminal window to finish the install.
 5. Grant the macOS permissions requested by the app.
 
-This method builds the app locally, so it requires Xcode Command Line Tools or a Swift toolchain. Most users should install the DMG from GitHub Releases.
+This method builds the app locally, so it requires Xcode Command Line Tools or a Swift toolchain. The result is ad-hoc signed for local use and is not a notarized distribution artifact, so most users should install the DMG from GitHub Releases.
 
 ## First-Time Setup
 
@@ -77,6 +78,17 @@ Live Interpreter translates speech into the selected target language in real tim
 
 Microphone translation requires microphone permission. System audio translation requires Screen & System Audio Recording permission.
 
+In addition to the realtime audio translation request, Live Interpreter may send part of the accumulated source transcript to the Responses API to produce fast provisional subtitles. Audio usage and text-token usage can therefore be charged separately.
+
+## Live Transcription
+
+Live Transcription displays speech as realtime captions in its original language, without translating it. Open `Live Transcription...` from the menu to use it.
+
+- Uses `gpt-live-transcribe` to update partial captions as speech arrives.
+- Supports microphone audio, all system audio, one application's audio, or microphone and system audio together.
+- Lets you leave the spoken language on automatic or provide one supported language as a hint.
+- Live transcription is billed separately by audio duration and is not supported on the Free tier.
+
 ## Supported Languages
 
 R2Trans currently includes these language codes:
@@ -94,8 +106,8 @@ zh-CN Chinese
 R2Trans only asks for permissions needed by its features.
 
 - Accessibility: required to copy selected text and paste translated text.
-- Microphone: required for microphone translation in Live Interpreter.
-- Screen & System Audio Recording: required for system audio translation in Live Interpreter.
+- Microphone: required for microphone audio in Live Interpreter or Live Transcription.
+- Screen & System Audio Recording: required for system audio in Live Interpreter or Live Transcription.
 
 If Accessibility permission is already enabled but R2Trans still asks again, remove the old R2Trans entry from System Settings, add `/Applications/R2Trans.app` again, then relaunch R2Trans.
 
@@ -103,7 +115,8 @@ If Accessibility permission is already enabled but R2Trans still asks again, rem
 
 - OpenAI API keys are entered by each user.
 - API keys are stored in the macOS Keychain.
-- Text selected for translation and Live Interpreter audio are sent to OpenAI to perform the requested translation.
+- Text selected for translation, Live Interpreter audio and accumulated transcript text used for provisional subtitles, and Live Transcription audio are sent to OpenAI to perform the requested feature.
+- Text translation requests use `store: false` so Responses API results are not stored.
 - On launch, R2Trans checks GitHub Releases to see whether a newer version is available.
 - R2Trans is designed to copy selected text, paste the translated result, and then restore the previous clipboard.
 

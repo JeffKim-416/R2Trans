@@ -117,6 +117,13 @@ enum AppText {
         case liveInterpreterNoSource
         case liveInterpreterWaitingSubtitle
         case liveInterpreterBillingNote
+        case liveTranscription
+        case liveTranscriptionTitle
+        case liveTranscriptionError
+        case liveTranscriptionNoTranscript
+        case liveTranscriptionBillingNote
+        case spokenLanguage
+        case automaticLanguage
     }
 
     private static let english: [Key: String] = [
@@ -203,7 +210,7 @@ enum AppText {
         .invalidHotkey: "Invalid hotkey",
         .responseMissing: "The OpenAI response did not include translated text.",
         .alreadyTranslating: "A translation is already in progress.",
-        .microphonePermissionDenied: "Microphone permission is required for live interpretation.",
+        .microphonePermissionDenied: "Microphone permission is required for live audio features.",
         .microphoneUnavailable: "The microphone could not be started.",
         .systemAudioUnavailable: "System audio capture could not be started. Allow R2Trans in System Settings > Privacy & Security > Screen & System Audio Recording, then try again.",
         .microphoneInput: "Microphone only",
@@ -217,7 +224,14 @@ enum AppText {
         .liveInterpreterError: "Live Interpreter Error",
         .liveInterpreterNoSource: "Source transcript will appear here.",
         .liveInterpreterWaitingSubtitle: "Translation subtitles will appear here.",
-        .liveInterpreterBillingNote: "Realtime translation is billed by audio duration. Free tier may not support gpt-realtime-translate."
+        .liveInterpreterBillingNote: "Realtime translation sends audio to gpt-realtime-translate and may also send rolling transcript text to the Responses API. Both requests can incur usage charges. Free tier does not support gpt-realtime-translate.",
+        .liveTranscription: "Live Transcription...",
+        .liveTranscriptionTitle: "Live Transcription",
+        .liveTranscriptionError: "Live Transcription Error",
+        .liveTranscriptionNoTranscript: "Live transcript will appear here.",
+        .liveTranscriptionBillingNote: "Live transcription uses gpt-live-transcribe and is billed by audio duration. Free tier is not supported.",
+        .spokenLanguage: "Spoken language",
+        .automaticLanguage: "Auto"
     ]
 
     private static let korean: [Key: String] = [
@@ -304,7 +318,7 @@ enum AppText {
         .invalidHotkey: "단축키 형식이 올바르지 않습니다",
         .responseMissing: "OpenAI 응답에서 번역된 텍스트를 찾지 못했습니다.",
         .alreadyTranslating: "이미 번역이 진행 중입니다.",
-        .microphonePermissionDenied: "실시간 통역에는 마이크 권한이 필요합니다.",
+        .microphonePermissionDenied: "실시간 음성 기능에는 마이크 권한이 필요합니다.",
         .microphoneUnavailable: "마이크를 시작하지 못했습니다.",
         .systemAudioUnavailable: "시스템 오디오 캡처를 시작하지 못했습니다. 시스템 설정 > 개인정보 보호 및 보안 > 화면 및 시스템 오디오 녹음에서 R2Trans를 허용한 뒤 다시 시도해주세요.",
         .microphoneInput: "마이크만",
@@ -318,7 +332,14 @@ enum AppText {
         .liveInterpreterError: "실시간 통역 오류",
         .liveInterpreterNoSource: "원문 transcript가 여기에 표시됩니다.",
         .liveInterpreterWaitingSubtitle: "번역 자막이 여기에 표시됩니다.",
-        .liveInterpreterBillingNote: "실시간 번역은 오디오 duration 기준으로 과금됩니다. Free tier에서는 gpt-realtime-translate가 지원되지 않을 수 있습니다."
+        .liveInterpreterBillingNote: "실시간 번역은 음성을 gpt-realtime-translate로 보내며, 임시 자막을 위해 누적 원문을 Responses API로 추가 전송할 수 있습니다. 두 요청 모두 사용량이 과금될 수 있고 Free tier는 gpt-realtime-translate를 지원하지 않습니다.",
+        .liveTranscription: "실시간 전사...",
+        .liveTranscriptionTitle: "실시간 전사",
+        .liveTranscriptionError: "실시간 전사 오류",
+        .liveTranscriptionNoTranscript: "실시간 전사 내용이 여기에 표시됩니다.",
+        .liveTranscriptionBillingNote: "실시간 전사는 gpt-live-transcribe를 사용하며 오디오 시간 기준으로 과금됩니다. Free tier는 지원되지 않습니다.",
+        .spokenLanguage: "음성 언어",
+        .automaticLanguage: "자동"
     ]
 
     private static let japanese: [Key: String] = [
@@ -405,7 +426,7 @@ enum AppText {
         .invalidHotkey: "無効なホットキーです",
         .responseMissing: "OpenAIの応答に翻訳テキストが含まれていませんでした。",
         .alreadyTranslating: "翻訳はすでに実行中です。",
-        .microphonePermissionDenied: "ライブ通訳にはマイクの権限が必要です。",
+        .microphonePermissionDenied: "リアルタイム音声機能にはマイクの権限が必要です。",
         .microphoneUnavailable: "マイクを開始できませんでした。",
         .systemAudioUnavailable: "システム音声キャプチャを開始できませんでした。システム設定 > プライバシーとセキュリティ > 画面とシステムオーディオ録音でR2Transを許可してから再試行してください。",
         .microphoneInput: "マイクのみ",
@@ -419,7 +440,14 @@ enum AppText {
         .liveInterpreterError: "ライブ通訳エラー",
         .liveInterpreterNoSource: "原文の文字起こしがここに表示されます。",
         .liveInterpreterWaitingSubtitle: "翻訳字幕がここに表示されます。",
-        .liveInterpreterBillingNote: "リアルタイム翻訳は音声時間に基づいて課金されます。Free tierではgpt-realtime-translateが利用できない場合があります。"
+        .liveInterpreterBillingNote: "リアルタイム翻訳では音声をgpt-realtime-translateへ送信し、仮字幕のために累積した文字起こしをResponses APIへ追加送信する場合があります。両方のリクエストに料金が発生する可能性があり、Free tierではgpt-realtime-translateを利用できません。",
+        .liveTranscription: "リアルタイム文字起こし...",
+        .liveTranscriptionTitle: "リアルタイム文字起こし",
+        .liveTranscriptionError: "リアルタイム文字起こしエラー",
+        .liveTranscriptionNoTranscript: "リアルタイム文字起こしがここに表示されます。",
+        .liveTranscriptionBillingNote: "リアルタイム文字起こしはgpt-live-transcribeを使用し、音声時間に基づいて課金されます。Free tierは利用できません。",
+        .spokenLanguage: "音声の言語",
+        .automaticLanguage: "自動"
     ]
 
     private static let chinese: [Key: String] = [
@@ -506,7 +534,7 @@ enum AppText {
         .invalidHotkey: "无效的快捷键",
         .responseMissing: "OpenAI 响应中没有包含翻译文本。",
         .alreadyTranslating: "翻译已在进行中。",
-        .microphonePermissionDenied: "实时口译需要麦克风权限。",
+        .microphonePermissionDenied: "实时音频功能需要麦克风权限。",
         .microphoneUnavailable: "无法启动麦克风。",
         .systemAudioUnavailable: "无法启动系统音频捕获。请在系统设置 > 隐私与安全性 > 屏幕与系统音频录制中允许 R2Trans，然后重试。",
         .microphoneInput: "仅麦克风",
@@ -520,6 +548,13 @@ enum AppText {
         .liveInterpreterError: "实时口译错误",
         .liveInterpreterNoSource: "源文本转录将显示在这里。",
         .liveInterpreterWaitingSubtitle: "翻译字幕将显示在这里。",
-        .liveInterpreterBillingNote: "实时翻译按音频时长计费。Free tier 可能不支持 gpt-realtime-translate。"
+        .liveInterpreterBillingNote: "实时翻译会将音频发送到 gpt-realtime-translate，并可能为了临时字幕将累计转录文本额外发送到 Responses API。两种请求都可能产生费用，Free tier 不支持 gpt-realtime-translate。",
+        .liveTranscription: "实时转录...",
+        .liveTranscriptionTitle: "实时转录",
+        .liveTranscriptionError: "实时转录错误",
+        .liveTranscriptionNoTranscript: "实时转录内容将显示在这里。",
+        .liveTranscriptionBillingNote: "实时转录使用 gpt-live-transcribe，并按音频时长计费。Free tier 不受支持。",
+        .spokenLanguage: "语音语言",
+        .automaticLanguage: "自动"
     ]
 }

@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settingsWindowController: SettingsWindowController?
     private var progressWindowController: TranslationProgressWindowController?
     private var liveInterpreterWindowController: LiveInterpreterWindowController?
+    private var liveTranscriptionWindowController: LiveTranscriptionWindowController?
     private var statusItem: NSStatusItem?
     private weak var autoPairMenuItem: NSMenuItem?
     private weak var sourceLanguageMenuItem: NSMenuItem?
@@ -40,6 +41,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         hotKeyManager.unregister()
+        liveInterpreterWindowController?.close()
+        liveTranscriptionWindowController?.close()
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -59,6 +62,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         liveInterpreterItem.target = self
         appMenu.addItem(liveInterpreterItem)
+
+        let liveTranscriptionItem = NSMenuItem(
+            title: AppText.text(.liveTranscription),
+            action: #selector(openLiveTranscriptionFromMenu),
+            keyEquivalent: "t"
+        )
+        liveTranscriptionItem.target = self
+        appMenu.addItem(liveTranscriptionItem)
 
         let settingsItem = NSMenuItem(
             title: AppText.text(.settings),
@@ -165,6 +176,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(confirmItem)
 
         menu.addItem(makeLiveInterpreterMenuItem())
+        menu.addItem(makeLiveTranscriptionMenuItem())
         menu.addItem(makeSettingsMenuItem())
 
         menu.addItem(NSMenuItem.separator())
@@ -237,6 +249,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func makeLiveInterpreterMenuItem() -> NSMenuItem {
         let item = NSMenuItem(title: AppText.text(.liveInterpreter), action: #selector(openLiveInterpreterFromMenu), keyEquivalent: "i")
+        item.target = self
+        return configureMenuItem(item, indentationLevel: 1)
+    }
+
+    private func makeLiveTranscriptionMenuItem() -> NSMenuItem {
+        let item = NSMenuItem(
+            title: AppText.text(.liveTranscription),
+            action: #selector(openLiveTranscriptionFromMenu),
+            keyEquivalent: "t"
+        )
         item.target = self
         return configureMenuItem(item, indentationLevel: 1)
     }
@@ -493,6 +515,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         openLiveInterpreter()
     }
 
+    @objc private func openLiveTranscriptionFromMenu() {
+        statusItem?.menu?.cancelTracking()
+        openLiveTranscription()
+    }
+
     @objc private func openLiveInterpreter() {
         if liveInterpreterWindowController == nil {
             liveInterpreterWindowController = LiveInterpreterWindowController()
@@ -501,6 +528,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.activate(ignoringOtherApps: true)
         liveInterpreterWindowController?.showWindow(nil)
         liveInterpreterWindowController?.window?.makeKeyAndOrderFront(nil)
+    }
+
+    @objc private func openLiveTranscription() {
+        if liveTranscriptionWindowController == nil {
+            liveTranscriptionWindowController = LiveTranscriptionWindowController()
+        }
+
+        NSApp.activate(ignoringOtherApps: true)
+        liveTranscriptionWindowController?.showWindow(nil)
+        liveTranscriptionWindowController?.window?.makeKeyAndOrderFront(nil)
     }
 
     @objc private func openSettings() {

@@ -30,6 +30,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let launchAtLoginSwitch = NSSwitch()
     private let showStatusBarSwitch = NSSwitch()
     private let liveInterpreterButton = NSButton()
+    private var apiKeyLoadError: Error?
 
     private let apiKeyLabel = NSTextField(labelWithString: "")
     private let apiKeyLinkLabel = NSTextField(labelWithString: "")
@@ -429,7 +430,14 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func reloadValues() {
-        apiKeyField.stringValue = KeychainStore.loadAPIKey()
+        do {
+            apiKeyField.stringValue = try KeychainStore.loadAPIKeyOrThrow()
+            apiKeyLoadError = nil
+        } catch {
+            apiKeyField.stringValue = ""
+            apiKeyLoadError = error
+            showSettingsError(error)
+        }
         hotKeyButton.hotKeyString = settings.hotKeyString
         modelPopup.selectItem(withTitle: SupportedModel.displayName(for: settings.model))
         reloadOptionControls()
@@ -451,9 +459,16 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     @objc private func save() {
         let previousHotKeyString = settings.hotKeyString
-        var registeredHotKeyString: String?
+        let previousLaunchAtLoginEnabled = LaunchAtLoginManager.isEnabled
+        var didRegisterHotKey = false
+        var didChangeLaunchAtLogin = false
 
         do {
+            if apiKeyField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               let apiKeyLoadError {
+                throw apiKeyLoadError
+            }
+
             try HotKeyValidator.validate(hotKeyButton.hotKeyString)
 
             let selectedWorkMode = WorkMode.allCases[workModePopup.indexOfSelectedItem]
@@ -463,9 +478,16 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             let selectedStyle = TranslationStyle.allCases[stylePopup.indexOfSelectedItem]
             let selectedModel = SupportedModel.all[modelPopup.indexOfSelectedItem]
             try onRegisterHotKey(hotKeyButton.hotKeyString)
-            registeredHotKeyString = hotKeyButton.hotKeyString
-            try LaunchAtLoginManager.setEnabled(launchAtLoginSwitch.state == .on)
+            didRegisterHotKey = true
+
+            let requestedLaunchAtLoginEnabled = launchAtLoginSwitch.state == .on
+            if requestedLaunchAtLoginEnabled != previousLaunchAtLoginEnabled {
+                didChangeLaunchAtLogin = true
+                try LaunchAtLoginManager.setEnabled(requestedLaunchAtLoginEnabled)
+            }
+
             try KeychainStore.saveAPIKey(apiKeyField.stringValue)
+            apiKeyLoadError = nil
 
             settings.workMode = selectedWorkMode
             settings.sourceLanguageCode = selectedSourceLanguage.code
@@ -481,16 +503,42 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             onSave()
             close()
         } catch {
-            if registeredHotKeyString != nil {
-                try? onRegisterHotKey(previousHotKeyString)
+            var rollbackErrors: [Error] = []
+
+            if didChangeLaunchAtLogin {
+                do {
+                    try LaunchAtLoginManager.setEnabled(previousLaunchAtLoginEnabled)
+                    launchAtLoginSwitch.state = previousLaunchAtLoginEnabled ? .on : .off
+                } catch {
+                    rollbackErrors.append(error)
+                }
             }
 
-            let alert = NSAlert()
-            alert.messageText = AppText.text(.settingsError)
-            alert.informativeText = error.localizedDescription
-            alert.alertStyle = .warning
-            alert.runModal()
+            if didRegisterHotKey {
+                do {
+                    try onRegisterHotKey(previousHotKeyString)
+                } catch {
+                    rollbackErrors.append(error)
+                }
+            }
+
+            let rollbackMessage = rollbackErrors.isEmpty
+                ? error.localizedDescription
+                : ([error.localizedDescription, "", "Rollback errors:"] + rollbackErrors.map(\.localizedDescription)).joined(separator: "\n")
+            showSettingsErrorMessage(rollbackMessage)
         }
+    }
+
+    private func showSettingsError(_ error: Error) {
+        showSettingsErrorMessage(error.localizedDescription)
+    }
+
+    private func showSettingsErrorMessage(_ message: String) {
+        let alert = NSAlert()
+        alert.messageText = AppText.text(.settingsError)
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.runModal()
     }
 
     @objc private func closeWindow() {

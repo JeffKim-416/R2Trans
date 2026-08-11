@@ -23,14 +23,13 @@ build/
 *.pkg
 *.zip
 
-# Developer-only local notes
-RELEASING.md
-
 # Local secrets and environment overrides
 .env
 .env.*
 *.pem
+*.p8
 *.p12
+*.pfx
 *.cer
 *.mobileprovision
 *.provisionprofile
