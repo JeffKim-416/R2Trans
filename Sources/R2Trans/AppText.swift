@@ -36,6 +36,10 @@ enum AppText {
         case appLanguage
         case hotkey
         case model
+        case textModelHelp
+        case autoDirectionHelp
+        case fixedDirectionHelp
+        case rewriteDirectionHelp
         case autoDetect
         case autoDetectPair
         case confirmBeforeReplace
@@ -144,7 +148,11 @@ enum AppText {
         .openAIAPIKey: "OpenAI API Key",
         .appLanguage: "App Language",
         .hotkey: "Hotkey",
-        .model: "Model",
+        .model: "Text Translation Model",
+        .textModelHelp: "Used for selected-text translation and rewriting. Live audio features use their own models.",
+        .autoDirectionHelp: "Detects the input language within the selected pair and translates into the other language.",
+        .fixedDirectionHelp: "Translates from the language on the left into the language on the right.",
+        .rewriteDirectionHelp: "Rewrites in the original language. Translation direction is not used.",
         .autoDetect: "Auto Detect",
         .autoDetectPair: "Auto Pair",
         .confirmBeforeReplace: "Confirm Before Replace",
@@ -253,7 +261,11 @@ enum AppText {
         .openAIAPIKey: "OpenAI API 키",
         .appLanguage: "앱 언어",
         .hotkey: "단축키",
-        .model: "모델",
+        .model: "텍스트 번역 모델",
+        .textModelHelp: "선택한 텍스트의 번역·다듬기에 적용됩니다. 실시간 음성 기능은 별도 모델을 사용합니다.",
+        .autoDirectionHelp: "선택한 쌍 안에서 입력 언어를 감지해 반대 언어로 번역합니다.",
+        .fixedDirectionHelp: "왼쪽 원문 언어에서 오른쪽 번역 언어로 번역합니다.",
+        .rewriteDirectionHelp: "입력 언어를 유지해 문장을 다듬습니다. 번역 방향은 적용되지 않습니다.",
         .autoDetect: "자동 감지",
         .autoDetectPair: "자동 감지 쌍",
         .confirmBeforeReplace: "바꾸기 전 확인",
@@ -362,7 +374,11 @@ enum AppText {
         .openAIAPIKey: "OpenAI APIキー",
         .appLanguage: "アプリの言語",
         .hotkey: "ホットキー",
-        .model: "モデル",
+        .model: "テキスト翻訳モデル",
+        .textModelHelp: "選択テキストの翻訳・書き直しに適用します。リアルタイム音声機能は別のモデルを使用します。",
+        .autoDirectionHelp: "選択したペア内で入力言語を検出し、もう一方の言語に翻訳します。",
+        .fixedDirectionHelp: "左側の元の言語から右側の言語に翻訳します。",
+        .rewriteDirectionHelp: "入力言語を維持して文章を整えます。翻訳方向は適用されません。",
         .autoDetect: "自動検出",
         .autoDetectPair: "自動ペア",
         .confirmBeforeReplace: "置換前に確認",
@@ -471,7 +487,11 @@ enum AppText {
         .openAIAPIKey: "OpenAI API 密钥",
         .appLanguage: "应用语言",
         .hotkey: "快捷键",
-        .model: "模型",
+        .model: "文本翻译模型",
+        .textModelHelp: "用于所选文本的翻译和润色。实时语音功能使用独立模型。",
+        .autoDirectionHelp: "在所选语言对中检测输入语言，并翻译为另一种语言。",
+        .fixedDirectionHelp: "从左侧的源语言翻译为右侧的目标语言。",
+        .rewriteDirectionHelp: "保持原文语言进行润色，不使用翻译方向。",
         .autoDetect: "自动检测",
         .autoDetectPair: "自动语言对",
         .confirmBeforeReplace: "替换前确认",

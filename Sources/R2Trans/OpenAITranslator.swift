@@ -192,6 +192,17 @@ final class OpenAITranslator: Sendable {
                 For Korean <-> Japanese, treat text with Hangul as Korean and text with Japanese kana or kanji without Hangul as Japanese.
                 Korean input must be translated into Japanese, and Japanese input must be translated into Korean.
                 """
+            case .koreanChinese:
+                pairSpecificInstruction = """
+                For Korean <-> Chinese, translate primarily Korean input into Simplified Chinese and primarily Chinese input into Korean.
+                Use the predominant language when both Hangul and Chinese characters appear.
+                Accept both Simplified and Traditional Chinese input, but use Simplified Chinese for Chinese output.
+                """
+            case .koreanSpanish:
+                pairSpecificInstruction = """
+                For Korean <-> Spanish, translate primarily Korean input into Spanish and primarily Spanish input into Korean.
+                Recognize Spanish accents and punctuation. Do not translate Spanish input into English.
+                """
             }
 
             modeInstruction = """
@@ -296,7 +307,7 @@ final class OpenAITranslator: Sendable {
             }
 
             return nil
-        case .koreanJapanese:
+        case .koreanJapanese, .koreanChinese, .koreanSpanish:
             return nil
         }
     }

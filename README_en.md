@@ -10,7 +10,7 @@ Select text in the app you are already using, press the hotkey, and R2Trans repl
 
 - Translates selected text with a global hotkey.
 - Supports translation directions such as `Korean -> English`, `English -> Korean`, `Japanese -> Korean`, and `Spanish -> English`.
-- Can auto-detect direction for `Korean <-> English` and `Korean <-> Japanese`.
+- Can auto-detect direction for `Korean <-> English`, `Korean <-> Japanese`, `Korean <-> Chinese`, and `Korean <-> Spanish`.
 - Lets you choose a translation style: Natural, Formal, Polite, Overly Deferential, or Nyang style for Korean output.
 - Can show a confirmation window before replacing the selected text.
 - Includes a Live Interpreter for translating microphone audio, system audio, or both.

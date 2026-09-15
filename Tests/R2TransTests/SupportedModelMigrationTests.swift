@@ -11,40 +11,16 @@ final class SupportedModelMigrationTests: XCTestCase {
         XCTAssertEqual(SupportedModel.defaultID, "gpt-5.6-luna")
     }
 
-    func testLegacyModelsMigrateToEquivalentGPT56Tier() {
-        let migrations = [
-            ("gpt-5.6", "gpt-5.6-sol"),
-            ("gpt-5.5", "gpt-5.6-sol"),
-            ("gpt-5.4", "gpt-5.6-sol"),
-            ("gpt-5.4-mini", "gpt-5.6-terra"),
-            ("gpt-5.4-nano", "gpt-5.6-luna"),
-            ("gpt-5.3-codex", "gpt-5.6-sol"),
-            ("gpt-5.2", "gpt-5.6-sol")
-        ]
-
-        for (storedID, expectedID) in migrations {
-            XCTAssertEqual(
-                SupportedModel.normalizedID(storedID),
-                expectedID,
-                "Unexpected migration for \(storedID)"
-            )
-        }
-    }
-
-    func testUnknownModelIsLeftForSettingsFallback() {
-        XCTAssertEqual(SupportedModel.normalizedID("future-model"), "future-model")
-    }
-
-    func testReadingLegacyStoredModelPersistsMigration() throws {
+    func testUnknownStoredModelFallsBackToDefault() throws {
         let suiteName = "R2TransTests.SupportedModelMigration.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
-        defaults.set("gpt-5.4-mini", forKey: "model")
+        defaults.set("future-model", forKey: "model")
 
         let settings = AppSettings(defaults: defaults)
 
-        XCTAssertEqual(settings.model, "gpt-5.6-terra")
-        XCTAssertEqual(defaults.string(forKey: "model"), "gpt-5.6-terra")
+        XCTAssertEqual(settings.model, SupportedModel.defaultID)
+        XCTAssertEqual(defaults.string(forKey: "model"), SupportedModel.defaultID)
     }
 }
 
@@ -60,5 +36,18 @@ final class LiveInterpreterSettingsTests: XCTestCase {
         settings.liveInterpreterProvisionalSubtitlesEnabled = false
 
         XCTAssertFalse(AppSettings(defaults: defaults).liveInterpreterProvisionalSubtitlesEnabled)
+    }
+}
+
+final class AutoDetectPairTests: XCTestCase {
+    func testKoreanChineseAndSpanishPairsAreAvailable() {
+        XCTAssertEqual(AutoDetectPair.allCases.map(\.rawValue), [
+            "ko-KR <-> en-US",
+            "ko-KR <-> ja-JP",
+            "ko-KR <-> zh-CN",
+            "ko-KR <-> es-ES"
+        ])
+        XCTAssertEqual(AutoDetectPair.koreanChinese.secondLanguageCode, "zh-CN")
+        XCTAssertEqual(AutoDetectPair.koreanSpanish.secondLanguageCode, "es-ES")
     }
 }

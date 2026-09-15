@@ -68,21 +68,7 @@ struct SupportedModel: Equatable {
     static let defaultID = "gpt-5.6-luna"
 
     static func displayName(for id: String) -> String {
-        all.first { $0.id == normalizedID(id) }?.displayName ?? id
-    }
-
-    static func normalizedID(_ id: String) -> String {
-        let aliases = [
-            "gpt-5.6": "gpt-5.6-sol",
-            "gpt-5.5": "gpt-5.6-sol",
-            "gpt-5.4": "gpt-5.6-sol",
-            "gpt-5.4-mini": "gpt-5.6-terra",
-            "gpt-5.4-nano": "gpt-5.6-luna",
-            "gpt-5.3-codex": "gpt-5.6-sol",
-            "gpt-5.2": "gpt-5.6-sol"
-        ]
-
-        return aliases[id] ?? id
+        all.first { $0.id == id }?.displayName ?? id
     }
 }
 
@@ -109,6 +95,8 @@ enum AppLanguage: String, CaseIterable {
 enum AutoDetectPair: String, CaseIterable {
     case koreanEnglish = "ko-KR <-> en-US"
     case koreanJapanese = "ko-KR <-> ja-JP"
+    case koreanChinese = "ko-KR <-> zh-CN"
+    case koreanSpanish = "ko-KR <-> es-ES"
 
     static let defaultValue = AutoDetectPair.koreanEnglish
 
@@ -118,7 +106,7 @@ enum AutoDetectPair: String, CaseIterable {
 
     var firstLanguageCode: String {
         switch self {
-        case .koreanEnglish, .koreanJapanese:
+        case .koreanEnglish, .koreanJapanese, .koreanChinese, .koreanSpanish:
             return "ko-KR"
         }
     }
@@ -129,6 +117,10 @@ enum AutoDetectPair: String, CaseIterable {
             return "en-US"
         case .koreanJapanese:
             return "ja-JP"
+        case .koreanChinese:
+            return "zh-CN"
+        case .koreanSpanish:
+            return "es-ES"
         }
     }
 }
@@ -251,9 +243,8 @@ final class AppSettings: @unchecked Sendable {
     var model: String {
         get {
             let storedModel = defaults.string(forKey: Key.model) ?? SupportedModel.defaultID
-            let normalizedModel = SupportedModel.normalizedID(storedModel)
-            let resolvedModel = SupportedModel.all.contains { $0.id == normalizedModel }
-                ? normalizedModel
+            let resolvedModel = SupportedModel.all.contains { $0.id == storedModel }
+                ? storedModel
                 : SupportedModel.defaultID
 
             if storedModel != resolvedModel {
@@ -263,7 +254,10 @@ final class AppSettings: @unchecked Sendable {
             return resolvedModel
         }
         set {
-            defaults.set(SupportedModel.normalizedID(newValue), forKey: Key.model)
+            let resolvedModel = SupportedModel.all.contains { $0.id == newValue }
+                ? newValue
+                : SupportedModel.defaultID
+            defaults.set(resolvedModel, forKey: Key.model)
         }
     }
 

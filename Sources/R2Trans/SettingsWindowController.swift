@@ -2,11 +2,11 @@ import AppKit
 
 final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private enum Layout {
-        static let windowWidth: CGFloat = 560
-        static let windowHeight: CGFloat = 604
-        static let labelWidth: CGFloat = 132
-        static let controlWidth: CGFloat = 360
-        static let rowSpacing: CGFloat = 12
+        static let windowWidth: CGFloat = 640
+        static let windowHeight: CGFloat = 730
+        static let labelWidth: CGFloat = 164
+        static let controlWidth: CGFloat = 400
+        static let rowSpacing: CGFloat = 10
         static let columnSpacing: CGFloat = 16
     }
 
@@ -47,8 +47,14 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let pasteButton = NSButton()
     private let saveButton = NSButton()
     private let closeButton = NSButton()
+    private let versionLabel = NSTextField(labelWithString: "")
     private let appLanguageButton = NSButton()
     private let titlebarAccessory = NSTitlebarAccessoryViewController()
+    private let connectionHeading = NSTextField(labelWithString: "")
+    private let translationHeading = NSTextField(labelWithString: "")
+    private let optionsHeading = NSTextField(labelWithString: "")
+    private let modelHelp = NSTextField(wrappingLabelWithString: "")
+    private let directionHelp = NSTextField(wrappingLabelWithString: "")
 
     init(
         onSave: @escaping () -> Void,
@@ -91,6 +97,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
         let stackView = NSStackView()
         stackView.orientation = .vertical
+        stackView.alignment = .leading
         stackView.spacing = Layout.rowSpacing
         stackView.edgeInsets = NSEdgeInsets(top: 22, left: 24, bottom: 18, right: 24)
         stackView.translatesAutoresizingMaskIntoConstraints = false
@@ -112,19 +119,27 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
         configureButtons()
 
+        stackView.addArrangedSubview(makeSectionHeading(connectionHeading))
         stackView.addArrangedSubview(makeAPIKeyRow())
         stackView.addArrangedSubview(makeAPIKeyLinkRow())
+        stackView.addArrangedSubview(makeSectionHeading(translationHeading))
         stackView.addArrangedSubview(makeWorkModeRow())
-        stackView.addArrangedSubview(makeLanguageRow())
         stackView.addArrangedSubview(makeAutoDetectRow())
+        stackView.addArrangedSubview(makeLanguageRow())
+        stackView.addArrangedSubview(makeHelpRow(directionHelp))
         stackView.addArrangedSubview(makeSwitchRow(label: confirmBeforeReplaceLabel, switchControl: confirmBeforeReplaceSwitch))
         stackView.addArrangedSubview(makeRow(label: styleLabel, control: stylePopup))
         stackView.addArrangedSubview(makeRow(label: hotKeyLabel, control: hotKeyButton))
         stackView.addArrangedSubview(makeRow(label: modelLabel, control: modelPopup))
+        stackView.addArrangedSubview(makeHelpRow(modelHelp))
+        stackView.addArrangedSubview(makeSectionHeading(optionsHeading))
         stackView.addArrangedSubview(makeLiveInterpreterRow())
         stackView.addArrangedSubview(makeSwitchRow(label: launchAtLoginLabel, switchControl: launchAtLoginSwitch))
         stackView.addArrangedSubview(makeSwitchRow(label: showStatusBarLabel, switchControl: showStatusBarSwitch))
-        stackView.addArrangedSubview(makeButtonRow())
+        let buttons = makeButtonRow()
+        buttons.widthAnchor.constraint(equalToConstant: Layout.labelWidth + Layout.columnSpacing + Layout.controlWidth).isActive = true
+        stackView.addArrangedSubview(buttons)
+        stackView.addArrangedSubview(makeVersionRow())
 
         contentView.addSubview(stackView)
 
@@ -132,8 +147,28 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             stackView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             stackView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
             stackView.topAnchor.constraint(equalTo: contentView.topAnchor),
-            stackView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor)
+            stackView.bottomAnchor.constraint(lessThanOrEqualTo: contentView.bottomAnchor)
         ])
+    }
+
+    private func makeSectionHeading(_ label: NSTextField) -> NSView {
+        label.font = .systemFont(ofSize: 12, weight: .semibold)
+        label.textColor = .secondaryLabelColor
+        let line = NSBox()
+        line.boxType = .separator
+        let row = NSStackView(views: [label, line])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 12
+        row.widthAnchor.constraint(equalToConstant: Layout.labelWidth + Layout.columnSpacing + Layout.controlWidth).isActive = true
+        return row
+    }
+
+    private func makeHelpRow(_ label: NSTextField) -> NSView {
+        label.font = .systemFont(ofSize: 11)
+        label.textColor = .secondaryLabelColor
+        label.setContentCompressionResistancePriority(.required, for: .vertical)
+        return makeRow(label: NSTextField(labelWithString: ""), control: label)
     }
 
     private func setupTitlebarSettingsButton() {
@@ -173,10 +208,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         saveButton.target = self
         saveButton.action = #selector(save)
         saveButton.bezelStyle = .rounded
+        saveButton.keyEquivalent = "\r"
 
         closeButton.target = self
         closeButton.action = #selector(closeWindow)
         closeButton.bezelStyle = .rounded
+        closeButton.keyEquivalent = "\u{1b}"
 
         liveInterpreterButton.target = self
         liveInterpreterButton.action = #selector(openLiveInterpreter)
@@ -225,6 +262,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         )
 
         window?.title = AppText.text(.settingsTitle)
+        connectionHeading.stringValue = AppText.text(.openAIAPIKey)
+        translationHeading.stringValue = AppText.text(.menuSectionTranslate)
+        optionsHeading.stringValue = AppText.text(.menuSectionOptions)
+        modelHelp.stringValue = AppText.text(.textModelHelp)
         appLanguageButton.toolTip = AppText.text(.appLanguage)
         appLanguageButton.image = NSImage(systemSymbolName: "character.book.closed", accessibilityDescription: AppText.text(.appLanguage))
 
@@ -245,6 +286,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         pasteButton.title = AppText.text(.paste)
         saveButton.title = AppText.text(.save)
         closeButton.title = AppText.text(.close)
+        versionLabel.stringValue = "Version \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—")"
 
         workModePopup.removeAllItems()
         workModePopup.addItems(withTitles: WorkMode.allCases.map(\.displayName))
@@ -284,7 +326,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         apiKeyLabel.widthAnchor.constraint(equalToConstant: Layout.labelWidth).isActive = true
 
         apiKeyField.translatesAutoresizingMaskIntoConstraints = false
-        apiKeyField.widthAnchor.constraint(equalToConstant: 254).isActive = true
+        apiKeyField.widthAnchor.constraint(equalToConstant: Layout.controlWidth - 106).isActive = true
         pasteButton.translatesAutoresizingMaskIntoConstraints = false
         pasteButton.widthAnchor.constraint(equalToConstant: 98).isActive = true
 
@@ -335,14 +377,14 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         translationModeLabel.alignment = .right
         translationModeLabel.widthAnchor.constraint(equalToConstant: Layout.labelWidth).isActive = true
 
-        let arrowLabel = NSTextField(labelWithString: "->")
+        let arrowLabel = NSTextField(labelWithString: "→")
         arrowLabel.alignment = .center
         arrowLabel.widthAnchor.constraint(equalToConstant: 28).isActive = true
 
         sourceLanguagePopup.translatesAutoresizingMaskIntoConstraints = false
         targetLanguagePopup.translatesAutoresizingMaskIntoConstraints = false
-        sourceLanguagePopup.widthAnchor.constraint(equalToConstant: 162).isActive = true
-        targetLanguagePopup.widthAnchor.constraint(equalToConstant: 162).isActive = true
+        sourceLanguagePopup.widthAnchor.constraint(equalToConstant: (Layout.controlWidth - 36) / 2).isActive = true
+        targetLanguagePopup.widthAnchor.constraint(equalToConstant: (Layout.controlWidth - 36) / 2).isActive = true
 
         let controlStack = NSStackView(views: [sourceLanguagePopup, arrowLabel, targetLanguagePopup])
         controlStack.orientation = .horizontal
@@ -365,7 +407,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         autoDetectSwitch.translatesAutoresizingMaskIntoConstraints = false
         autoDetectSwitch.widthAnchor.constraint(equalToConstant: 46).isActive = true
         autoDetectPairPopup.translatesAutoresizingMaskIntoConstraints = false
-        autoDetectPairPopup.widthAnchor.constraint(equalToConstant: 306).isActive = true
+        autoDetectPairPopup.widthAnchor.constraint(equalToConstant: Layout.controlWidth - 54).isActive = true
 
         let controlStack = NSStackView(views: [autoDetectSwitch, autoDetectPairPopup])
         controlStack.orientation = .horizontal
@@ -427,6 +469,14 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         row.orientation = .horizontal
         row.spacing = 8
         return row
+    }
+
+    private func makeVersionRow() -> NSView {
+        versionLabel.font = .systemFont(ofSize: 11)
+        versionLabel.textColor = .secondaryLabelColor
+        versionLabel.alignment = .right
+        versionLabel.widthAnchor.constraint(equalToConstant: Layout.labelWidth + Layout.columnSpacing + Layout.controlWidth).isActive = true
+        return versionLabel
     }
 
     func reloadValues() {
@@ -579,6 +629,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         let selectedWorkMode = WorkMode.allCases[workModePopup.indexOfSelectedItem]
         let isTranslationMode = selectedWorkMode == .translation
         let autoDetectEnabled = autoDetectSwitch.state == .on
+        directionHelp.stringValue = AppText.text(isTranslationMode
+            ? (autoDetectEnabled ? .autoDirectionHelp : .fixedDirectionHelp)
+            : .rewriteDirectionHelp)
         sourceLanguagePopup.isEnabled = isTranslationMode && !autoDetectEnabled
         targetLanguagePopup.isEnabled = isTranslationMode && !autoDetectEnabled
         autoDetectSwitch.isEnabled = isTranslationMode

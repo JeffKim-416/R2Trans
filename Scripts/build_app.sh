@@ -13,6 +13,8 @@ SWIFT_CACHE_DIR="$BUILD_DIR/swift-cache"
 SWIFT_CONFIG_DIR="$BUILD_DIR/swift-config"
 SWIFT_SECURITY_DIR="$BUILD_DIR/swift-security"
 MODULE_CACHE_DIR="$BUILD_DIR/module-cache"
+ICON_SOURCE="$ROOT_DIR/Assets/R2Trans-icon.png"
+ICONSET_DIR="$BUILD_DIR/R2Trans.iconset"
 BUNDLE_IDENTIFIER="io.github.r2trans.R2Trans"
 
 CODESIGN_IDENTITY="${R2TRANS_CODESIGN_IDENTITY:-}"
@@ -56,6 +58,9 @@ validate_boolean_flag() {
 
 validate_boolean_flag "R2TRANS_ALLOW_ADHOC" "$ALLOW_ADHOC"
 validate_boolean_flag "R2TRANS_REQUIRE_DISTRIBUTION" "$REQUIRE_DISTRIBUTION"
+[[ -f "$ICON_SOURCE" ]] || fail "Missing app icon source at $ICON_SOURCE."
+command -v sips >/dev/null || fail "sips is required to build the app icon."
+xcrun --find iconutil >/dev/null || fail "iconutil is required to build the app icon."
 
 APP_VERSION="$(read_tracked_version)"
 if [[ -n "${R2TRANS_VERSION:-}" ]]; then
@@ -133,7 +138,27 @@ ARM64_EXECUTABLE="$(build_architecture arm64)"
 X86_64_EXECUTABLE="$(build_architecture x86_64)"
 
 rm -rf "$APP_DIR"
-mkdir -p "$MACOS_DIR"
+mkdir -p "$MACOS_DIR" "$CONTENTS_DIR/Resources"
+
+create_icon_file() {
+    local size="$1"
+    local name="$2"
+    sips -z "$size" "$size" "$ICON_SOURCE" --out "$ICONSET_DIR/$name" >/dev/null
+}
+
+rm -rf "$ICONSET_DIR"
+mkdir -p "$ICONSET_DIR"
+create_icon_file 16 icon_16x16.png
+create_icon_file 32 icon_16x16@2x.png
+create_icon_file 32 icon_32x32.png
+create_icon_file 64 icon_32x32@2x.png
+create_icon_file 128 icon_128x128.png
+create_icon_file 256 icon_128x128@2x.png
+create_icon_file 256 icon_256x256.png
+create_icon_file 512 icon_256x256@2x.png
+create_icon_file 512 icon_512x512.png
+create_icon_file 1024 icon_512x512@2x.png
+xcrun iconutil -c icns "$ICONSET_DIR" -o "$CONTENTS_DIR/Resources/R2Trans.icns"
 
 xcrun lipo -create \
     "$ARM64_EXECUTABLE" \
@@ -155,6 +180,8 @@ cat > "$INFO_PLIST" <<PLIST
     <string>$BUNDLE_IDENTIFIER</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
+    <key>CFBundleIconFile</key>
+    <string>R2Trans.icns</string>
     <key>CFBundleName</key>
     <string>R2Trans</string>
     <key>CFBundlePackageType</key>

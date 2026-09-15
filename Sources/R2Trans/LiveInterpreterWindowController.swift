@@ -4,7 +4,7 @@ import AppKit
 final class LiveInterpreterWindowController: NSWindowController, NSWindowDelegate {
     private enum Layout {
         static let windowWidth: CGFloat = 980
-        static let windowHeight: CGFloat = 680
+        static let windowHeight: CGFloat = 740
         static let contentInset: CGFloat = 20
         static let formLabelWidth: CGFloat = 116
         static let formControlWidth: CGFloat = 420
@@ -60,7 +60,7 @@ final class LiveInterpreterWindowController: NSWindowController, NSWindowDelegat
             defer: false
         )
         window.center()
-        window.minSize = NSSize(width: 760, height: 520)
+        window.contentMinSize = NSSize(width: 760, height: 650)
         window.isReleasedWhenClosed = false
 
         super.init(window: window)
@@ -148,15 +148,18 @@ final class LiveInterpreterWindowController: NSWindowController, NSWindowDelegat
 
         let translationLanguageRow = makeFormRow(label: translationLanguageLabel, control: outputLanguagePopup)
 
-        provisionalSubtitlesLabel.alignment = .right
-        provisionalSubtitlesLabel.widthAnchor.constraint(equalToConstant: Layout.formLabelWidth).isActive = true
+        provisionalSubtitlesLabel.alignment = .left
         provisionalSubtitlesSwitch.state = AppSettings.shared.liveInterpreterProvisionalSubtitlesEnabled ? .on : .off
         provisionalSubtitlesSwitch.target = self
         provisionalSubtitlesSwitch.action = #selector(provisionalSubtitlesDidChange)
-        let provisionalSubtitlesRow = makeFormRow(
-            label: provisionalSubtitlesLabel,
-            control: provisionalSubtitlesSwitch
-        )
+        let provisionalControls = NSStackView(views: [provisionalSubtitlesSwitch, provisionalSubtitlesLabel])
+        provisionalControls.orientation = .horizontal
+        provisionalControls.alignment = .centerY
+        provisionalControls.spacing = 8
+        provisionalSubtitlesLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        let provisionalSpacer = NSTextField(labelWithString: "")
+        provisionalSpacer.widthAnchor.constraint(equalToConstant: Layout.formLabelWidth).isActive = true
+        let provisionalSubtitlesRow = makeFormRow(label: provisionalSpacer, control: provisionalControls)
 
         configureWaveView(microphoneWaveView)
         configureWaveView(systemAudioWaveView)
@@ -204,6 +207,7 @@ final class LiveInterpreterWindowController: NSWindowController, NSWindowDelegat
         startStopButton.target = self
         startStopButton.action = #selector(toggleListening)
         startStopButton.bezelStyle = .rounded
+        startStopButton.keyEquivalent = "\r"
 
         clearButton.target = self
         clearButton.action = #selector(clearTranscripts)
@@ -226,9 +230,10 @@ final class LiveInterpreterWindowController: NSWindowController, NSWindowDelegat
         buttonStack.spacing = 8
 
         billingNoteLabel.font = .systemFont(ofSize: 11)
-        billingNoteLabel.textColor = .tertiaryLabelColor
+        billingNoteLabel.textColor = .secondaryLabelColor
         billingNoteLabel.lineBreakMode = .byWordWrapping
-        billingNoteLabel.maximumNumberOfLines = 2
+        billingNoteLabel.maximumNumberOfLines = 0
+        billingNoteLabel.setContentCompressionResistancePriority(.required, for: .vertical)
 
         let controlsSpacer = NSView()
         controlsSpacer.setContentHuggingPriority(.defaultLow, for: .vertical)
@@ -261,11 +266,11 @@ final class LiveInterpreterWindowController: NSWindowController, NSWindowDelegat
             controlsPane.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             controlsPane.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
             controlsPane.topAnchor.constraint(equalTo: contentView.topAnchor),
-            controlsPane.bottomAnchor.constraint(equalTo: contentView.centerYAnchor),
+            controlsPane.heightAnchor.constraint(equalToConstant: 365),
 
             transcriptPane.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             transcriptPane.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
-            transcriptPane.topAnchor.constraint(equalTo: contentView.centerYAnchor),
+            transcriptPane.topAnchor.constraint(equalTo: controlsPane.bottomAnchor),
             transcriptPane.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
 
             controlsPaneStack.leadingAnchor.constraint(equalTo: controlsPane.leadingAnchor),
@@ -343,7 +348,7 @@ final class LiveInterpreterWindowController: NSWindowController, NSWindowDelegat
         systemAudioLevelLabel.stringValue = AppText.text(.systemAudioLevel)
         transcriptPanelTitleLabel.stringValue = AppText.text(.translatedSubtitle)
         sourceTranscriptTitleLabel.stringValue = AppText.text(.sourceTranscript)
-        translatedSubtitleTitleLabel.stringValue = AppText.text(.targetLanguage)
+        translatedSubtitleTitleLabel.stringValue = AppText.text(.translatedSubtitle)
         inputSourcePopup.removeAllItems()
         inputSourcePopup.addItems(withTitles: LiveInterpreterInputSource.allCases.map(\.displayName))
         inputSourcePopup.selectItem(at: 0)
@@ -538,9 +543,12 @@ final class LiveInterpreterWindowController: NSWindowController, NSWindowDelegat
         in scrollView: TranscriptScrollView,
         text: String
     ) {
+        let wasAtBottom = scrollView.documentVisibleRect.maxY >= textView.bounds.maxY - 24
         textView.string = text
         scrollView.resizeDocumentViewToContentWidth()
-        textView.scrollToEndOfDocument(nil)
+        if wasAtBottom {
+            textView.scrollToEndOfDocument(nil)
+        }
     }
 
     private func makeTranscriptPanel() -> NSView {
