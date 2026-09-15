@@ -27,6 +27,8 @@ final class LiveInterpreterWindowController: NSWindowController, NSWindowDelegat
     private let audioApplicationRow = NSStackView()
     private let translationLanguageLabel = NSTextField(labelWithString: "")
     private let outputLanguagePopup = NSPopUpButton()
+    private let provisionalSubtitlesLabel = NSTextField(labelWithString: "")
+    private let provisionalSubtitlesSwitch = NSSwitch()
     private let audioLevelLabel = NSTextField(labelWithString: "")
     private let microphoneLevelLabel = NSTextField(labelWithString: "")
     private let systemAudioLevelLabel = NSTextField(labelWithString: "")
@@ -146,6 +148,16 @@ final class LiveInterpreterWindowController: NSWindowController, NSWindowDelegat
 
         let translationLanguageRow = makeFormRow(label: translationLanguageLabel, control: outputLanguagePopup)
 
+        provisionalSubtitlesLabel.alignment = .right
+        provisionalSubtitlesLabel.widthAnchor.constraint(equalToConstant: Layout.formLabelWidth).isActive = true
+        provisionalSubtitlesSwitch.state = AppSettings.shared.liveInterpreterProvisionalSubtitlesEnabled ? .on : .off
+        provisionalSubtitlesSwitch.target = self
+        provisionalSubtitlesSwitch.action = #selector(provisionalSubtitlesDidChange)
+        let provisionalSubtitlesRow = makeFormRow(
+            label: provisionalSubtitlesLabel,
+            control: provisionalSubtitlesSwitch
+        )
+
         configureWaveView(microphoneWaveView)
         configureWaveView(systemAudioWaveView)
 
@@ -168,6 +180,7 @@ final class LiveInterpreterWindowController: NSWindowController, NSWindowDelegat
             inputSourceRow,
             audioApplicationRow,
             translationLanguageRow,
+            provisionalSubtitlesRow,
             audioLevelRow
         ])
         controlsStack.orientation = .vertical
@@ -324,6 +337,7 @@ final class LiveInterpreterWindowController: NSWindowController, NSWindowDelegat
         inputSourceLabel.stringValue = AppText.text(.inputSource)
         audioApplicationLabel.stringValue = AppText.text(.audioApplication)
         translationLanguageLabel.stringValue = AppText.text(.targetLanguage)
+        provisionalSubtitlesLabel.stringValue = AppText.text(.liveInterpreterProvisionalSubtitles)
         audioLevelLabel.stringValue = AppText.text(.audioLevel)
         microphoneLevelLabel.stringValue = AppText.text(.microphoneLevel)
         systemAudioLevelLabel.stringValue = AppText.text(.systemAudioLevel)
@@ -367,6 +381,7 @@ final class LiveInterpreterWindowController: NSWindowController, NSWindowDelegat
         audioApplicationPopup.isEnabled = !isRunning && !isStarting
         reloadAudioApplicationsButton.isEnabled = !isRunning && !isStarting
         outputLanguagePopup.isEnabled = !isRunning && !isStarting
+        provisionalSubtitlesSwitch.isEnabled = !isRunning && !isStarting
 
         if !isRunning && !isStarting {
             resetAudioMeters()
@@ -388,6 +403,7 @@ final class LiveInterpreterWindowController: NSWindowController, NSWindowDelegat
         let inputSource = LiveInterpreterInputSource.allCases[inputSourcePopup.indexOfSelectedItem]
         let targetLanguage = SupportedLanguage.all[outputLanguagePopup.indexOfSelectedItem]
         let systemAudioTarget = selectedSystemAudioTarget()
+        let provisionalSubtitlesEnabled = provisionalSubtitlesSwitch.state == .on
         startGeneration &+= 1
         let generation = startGeneration
         isStarting = true
@@ -405,7 +421,8 @@ final class LiveInterpreterWindowController: NSWindowController, NSWindowDelegat
                 try await service.start(
                     inputSource: inputSource,
                     targetLanguageCode: targetLanguage.code,
-                    systemAudioTarget: systemAudioTarget
+                    systemAudioTarget: systemAudioTarget,
+                    provisionalSubtitlesEnabled: provisionalSubtitlesEnabled
                 )
                 guard generation == startGeneration else {
                     return
@@ -450,6 +467,10 @@ final class LiveInterpreterWindowController: NSWindowController, NSWindowDelegat
         resetAudioMeters()
         refreshAudioApplicationAvailability()
         refreshMeterAvailability()
+    }
+
+    @objc private func provisionalSubtitlesDidChange() {
+        AppSettings.shared.liveInterpreterProvisionalSubtitlesEnabled = provisionalSubtitlesSwitch.state == .on
     }
 
     @objc private func reloadAudioApplications() {

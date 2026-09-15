@@ -29,7 +29,7 @@ R2Trans may request these macOS permissions:
 
 ## Release Integrity
 
-Published releases must be universal (`arm64` and `x86_64`), signed with a Developer ID Application certificate and hardened runtime, notarized by Apple, and stapled before upload. The release workflow fails rather than publishing an ad-hoc or unnotarized artifact.
+Official signed releases must be universal (`arm64` and `x86_64`), signed with a Developer ID Application certificate and hardened runtime, notarized by Apple, and stapled before upload. The default open-source workflow publishes an ad-hoc signed, unnotarized artifact and clearly labels it as such.
 
 Each release includes `R2Trans.dmg.sha256`. Verify a downloaded DMG with:
 

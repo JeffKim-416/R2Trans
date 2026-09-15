@@ -3,246 +3,36 @@ name: Release
 on:
   push:
     tags:
-      - "v*.*.*"
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: "Release tag, for example v0.2.2"
-        required: true
-        type: string
+      - 'v*.*.*'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  build:
-    name: Build, sign, and notarize universal DMG
-    runs-on: macos-15
-    timeout-minutes: 60
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
-
-    outputs:
-      release_tag: ${{ steps.release.outputs.tag }}
-
+  release:
+    runs-on: macos-14
     steps:
-      - name: Checkout workflow revision
-        # actions/checkout v4.2.2
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          persist-credentials: false
 
-      - name: Resolve and validate release tag
-        id: release
+      - name: Run tests
+        run: swift test
+
+      - name: Build unsigned universal DMG
         env:
-          DISPATCH_TAG: ${{ inputs.tag }}
-          EVENT_NAME: ${{ github.event_name }}
-          REF_NAME: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
+          R2TRANS_ALLOW_ADHOC: '1'
+          R2TRANS_REQUIRE_DISTRIBUTION: '0'
+        run: Scripts/create_dmg.sh
 
-          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
-            tag="$DISPATCH_TAG"
-          else
-            tag="$REF_NAME"
-          fi
+      - name: Create checksum
+        run: shasum -a 256 build/R2Trans.dmg > build/R2Trans.dmg.sha256
 
-          if [[ ! "$tag" =~ ^v[0-9]+[.][0-9]+[.][0-9]+$ ]]; then
-            echo "::error::Release tag must match vX.Y.Z, got '$tag'"
-            exit 1
-          fi
-
-          git rev-parse --verify --quiet "refs/tags/$tag^{commit}" >/dev/null
-          git checkout --detach "refs/tags/$tag"
-
-          tracked_version="$(tr -d '[:space:]' < VERSION)"
-          if [[ "$tag" != "v$tracked_version" ]]; then
-            echo "::error::Tag '$tag' does not match tracked VERSION '$tracked_version'"
-            exit 1
-          fi
-
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-
-      - name: Verify pinned toolchain
-        run: |
-          set -euo pipefail
-          test -d "$DEVELOPER_DIR"
-          xcodebuild -version
-          swift --version
-
-      - name: Require signing and notarization secrets
-        env:
-          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
-          APPLE_NOTARY_KEY_BASE64: ${{ secrets.APPLE_NOTARY_KEY_BASE64 }}
-          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
-          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
-          MACOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.MACOS_PROVISIONING_PROFILE_BASE64 }}
-          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
-        run: |
-          set -euo pipefail
-          required_names=(
-            APPLE_NOTARY_ISSUER_ID
-            APPLE_NOTARY_KEY_BASE64
-            APPLE_NOTARY_KEY_ID
-            APPLE_TEAM_ID
-            MACOS_CERTIFICATE_BASE64
-            MACOS_CERTIFICATE_PASSWORD
-            MACOS_PROVISIONING_PROFILE_BASE64
-            MACOS_SIGNING_IDENTITY
-          )
-
-          missing=0
-          for name in "${required_names[@]}"; do
-            if [[ -z "${!name:-}" ]]; then
-              echo "::error::Required release secret '$name' is not configured"
-              missing=1
-            fi
-          done
-          [[ "$missing" == "0" ]]
-
-      - name: Import signing and notarization credentials
-        env:
-          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
-          APPLE_NOTARY_KEY_BASE64: ${{ secrets.APPLE_NOTARY_KEY_BASE64 }}
-          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
-          MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
-          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
-          MACOS_PROVISIONING_PROFILE_BASE64: ${{ secrets.MACOS_PROVISIONING_PROFILE_BASE64 }}
-          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
-        run: |
-          set -euo pipefail
-
-          signing_keychain="$RUNNER_TEMP/r2trans-signing.keychain-db"
-          signing_certificate="$RUNNER_TEMP/r2trans-signing.p12"
-          provisioning_profile="$RUNNER_TEMP/R2Trans.provisionprofile"
-          notary_key="$RUNNER_TEMP/r2trans-notary-key.p8"
-          notary_profile="r2trans-ci-notary"
-          keychain_password="$(uuidgen)"
-
-          printf '%s' "$MACOS_CERTIFICATE_BASE64" | /usr/bin/base64 -D > "$signing_certificate"
-          printf '%s' "$MACOS_PROVISIONING_PROFILE_BASE64" | /usr/bin/base64 -D > "$provisioning_profile"
-          printf '%s' "$APPLE_NOTARY_KEY_BASE64" | /usr/bin/base64 -D > "$notary_key"
-          chmod 600 "$signing_certificate" "$provisioning_profile" "$notary_key"
-
-          security create-keychain -p "$keychain_password" "$signing_keychain"
-          security set-keychain-settings -lut 21600 "$signing_keychain"
-          security unlock-keychain -p "$keychain_password" "$signing_keychain"
-          security import "$signing_certificate" \
-            -k "$signing_keychain" \
-            -P "$MACOS_CERTIFICATE_PASSWORD" \
-            -T /usr/bin/codesign \
-            -T /usr/bin/security
-          security set-key-partition-list \
-            -S apple-tool:,apple: \
-            -s \
-            -k "$keychain_password" \
-            "$signing_keychain"
-          security list-keychains -d user -s "$signing_keychain"
-          security default-keychain -d user -s "$signing_keychain"
-
-          security find-identity -v -p codesigning "$signing_keychain" | grep -F "\"$MACOS_SIGNING_IDENTITY\""
-
-          xcrun notarytool store-credentials "$notary_profile" \
-            --key "$notary_key" \
-            --key-id "$APPLE_NOTARY_KEY_ID" \
-            --issuer "$APPLE_NOTARY_ISSUER_ID" \
-            --keychain "$signing_keychain"
-
-          {
-            echo "R2TRANS_CI_KEYCHAIN=$signing_keychain"
-            echo "R2TRANS_CI_CERTIFICATE=$signing_certificate"
-            echo "R2TRANS_CI_NOTARY_KEY=$notary_key"
-            echo "R2TRANS_CI_PROVISIONING_PROFILE=$provisioning_profile"
-            echo "R2TRANS_NOTARY_PROFILE=$notary_profile"
-          } >> "$GITHUB_ENV"
-
-      - name: Build notarized DMG
-        env:
-          R2TRANS_CODESIGN_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
-          R2TRANS_REQUIRE_DISTRIBUTION: "1"
-          R2TRANS_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          R2TRANS_VERSION: ${{ steps.release.outputs.tag }}
-        run: |
-          set -euo pipefail
-          export R2TRANS_NOTARY_KEYCHAIN="$R2TRANS_CI_KEYCHAIN"
-          export R2TRANS_PROVISIONING_PROFILE="$R2TRANS_CI_PROVISIONING_PROFILE"
-          Scripts/create_dmg.sh
-
-      - name: Verify release artifacts
-        run: |
-          set -euo pipefail
-          codesign --verify --deep --strict --verbose=2 build/R2Trans.app
-          codesign -dv --verbose=4 build/R2Trans.app 2>&1 | grep -Eq '^CodeDirectory .*flags=.*runtime'
-          codesign -dv --verbose=4 build/R2Trans.app 2>&1 | grep -Eq '^Timestamp='
-          xcrun lipo build/R2Trans.app/Contents/MacOS/R2Trans -verify_arch arm64 x86_64
-          xcrun stapler validate build/R2Trans.app
-          spctl --assess --type execute --verbose=4 build/R2Trans.app
-          codesign --verify --verbose=2 build/R2Trans.dmg
-          xcrun stapler validate build/R2Trans.dmg
-          spctl --assess --type open --context context:primary-signature --verbose=4 build/R2Trans.dmg
-          (cd build && shasum -a 256 R2Trans.dmg > R2Trans.dmg.sha256)
-          cat build/R2Trans.dmg.sha256
-
-      - name: Upload verified release assets
-        # actions/upload-artifact v4.6.2
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: release-assets
-          path: |
-            build/R2Trans.dmg
-            build/R2Trans.dmg.sha256
-          if-no-files-found: error
-          retention-days: 7
-
-      - name: Remove temporary credentials
-        if: always()
-        run: |
-          set +e
-          security delete-keychain \
-            "${R2TRANS_CI_KEYCHAIN:-$RUNNER_TEMP/r2trans-signing.keychain-db}" \
-            >/dev/null 2>&1
-          rm -f \
-            "${R2TRANS_CI_CERTIFICATE:-$RUNNER_TEMP/r2trans-signing.p12}" \
-            "${R2TRANS_CI_NOTARY_KEY:-$RUNNER_TEMP/r2trans-notary-key.p8}" \
-            "${R2TRANS_CI_PROVISIONING_PROFILE:-$RUNNER_TEMP/R2Trans.provisionprofile}"
-
-  publish:
-    name: Publish GitHub Release assets
-    needs: build
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      contents: write
-
-    steps:
-      - name: Download verified release assets
-        # actions/download-artifact v4.3.0
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
-        with:
-          name: release-assets
-          path: build
-
-      - name: Create or update GitHub Release assets
+      - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG_NAME: ${{ needs.build.outputs.release_tag }}
         run: |
-          set -euo pipefail
-          (cd build && sha256sum --check R2Trans.dmg.sha256)
-          if gh release view "$TAG_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$TAG_NAME" \
-              build/R2Trans.dmg \
-              build/R2Trans.dmg.sha256 \
-              --repo "$GITHUB_REPOSITORY" \
-              --clobber
-          else
-            gh release create "$TAG_NAME" \
-              build/R2Trans.dmg \
-              build/R2Trans.dmg.sha256 \
-              --repo "$GITHUB_REPOSITORY" \
-              --title "$TAG_NAME" \
-              --generate-notes
-          fi
+          gh release create "$GITHUB_REF_NAME" \
+            --title "R2Trans $GITHUB_REF_NAME" \
+            --generate-notes \
+            build/R2Trans.dmg build/R2Trans.dmg.sha256

@@ -196,6 +196,7 @@ final class AppSettings: @unchecked Sendable {
         static let translationStyle = "translationStyle"
         static let showStatusBarIcon = "showStatusBarIcon"
         static let workMode = "workMode"
+        static let liveInterpreterProvisionalSubtitlesEnabled = "liveInterpreterProvisionalSubtitlesEnabled"
     }
 
     var sourceLanguageCode: String {
@@ -342,6 +343,19 @@ final class AppSettings: @unchecked Sendable {
         }
         set {
             defaults.set(newValue.rawValue, forKey: Key.workMode)
+        }
+    }
+
+    var liveInterpreterProvisionalSubtitlesEnabled: Bool {
+        get {
+            guard defaults.object(forKey: Key.liveInterpreterProvisionalSubtitlesEnabled) != nil else {
+                return true
+            }
+
+            return defaults.bool(forKey: Key.liveInterpreterProvisionalSubtitlesEnabled)
+        }
+        set {
+            defaults.set(newValue, forKey: Key.liveInterpreterProvisionalSubtitlesEnabled)
         }
     }
 

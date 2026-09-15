@@ -18,6 +18,7 @@ final class LiveInterpreterService {
     private var lastOfficialSubtitleUpdateTime: TimeInterval = 0
     private var lastAudioLevelUpdate: [LiveInterpreterAudioSource: TimeInterval] = [:]
     private var audioChunkCount = 0
+    private var provisionalSubtitlesEnabled = true
     private var sessionGeneration = 0
     private var isStarting = false
 
@@ -26,7 +27,8 @@ final class LiveInterpreterService {
     func start(
         inputSource: LiveInterpreterInputSource,
         targetLanguageCode: String,
-        systemAudioTarget: LiveInterpreterSystemAudioTarget
+        systemAudioTarget: LiveInterpreterSystemAudioTarget,
+        provisionalSubtitlesEnabled: Bool
     ) async throws {
         guard !isRunning, !isStarting else {
             return
@@ -40,6 +42,7 @@ final class LiveInterpreterService {
         sessionGeneration &+= 1
         let generation = sessionGeneration
         isStarting = true
+        self.provisionalSubtitlesEnabled = provisionalSubtitlesEnabled
         resetTranscriptState()
         targetLanguageDisplayName = SupportedLanguage.displayName(for: targetLanguageCode)
 
@@ -308,11 +311,13 @@ final class LiveInterpreterService {
             )
             let sourceDisplay = Self.trimmedTail(sourceTranscript, limit: 800)
             sendUpdate(.sourceTranscript(Self.lineBrokenSentences(in: sourceDisplay)))
-            requestProvisionalSubtitle(
-                targetLanguage: targetLanguage,
-                socket: socket,
-                generation: generation
-            )
+            if provisionalSubtitlesEnabled {
+                requestProvisionalSubtitle(
+                    targetLanguage: targetLanguage,
+                    socket: socket,
+                    generation: generation
+                )
+            }
         case .outputTranscriptDelta(let delta):
             translatedSubtitle = Self.trimmedTail(translatedSubtitle + delta, limit: 1_500)
             provisionalSubtitle = ""

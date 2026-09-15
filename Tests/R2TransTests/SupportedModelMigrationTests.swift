@@ -47,3 +47,18 @@ final class SupportedModelMigrationTests: XCTestCase {
         XCTAssertEqual(defaults.string(forKey: "model"), "gpt-5.6-terra")
     }
 }
+
+final class LiveInterpreterSettingsTests: XCTestCase {
+    func testProvisionalSubtitlesDefaultToEnabledAndPersistChanges() throws {
+        let suiteName = "R2TransTests.LiveInterpreterSettings.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let settings = AppSettings(defaults: defaults)
+
+        XCTAssertTrue(settings.liveInterpreterProvisionalSubtitlesEnabled)
+
+        settings.liveInterpreterProvisionalSubtitlesEnabled = false
+
+        XCTAssertFalse(AppSettings(defaults: defaults).liveInterpreterProvisionalSubtitlesEnabled)
+    }
+}

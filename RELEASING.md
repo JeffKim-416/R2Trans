@@ -8,9 +8,11 @@ R2Trans releases are built by GitHub Actions. Release artifacts and credentials 
 
 The build rejects a release tag or `R2TRANS_VERSION` that does not match `VERSION`. This also keeps builds from a GitHub source ZIP or from `main` on the correct version when Git metadata is unavailable or the checkout is not exactly on a tag.
 
-## Required GitHub Actions Secrets
+## Unsigned open-source releases
 
-Configure all of the following repository Actions secrets. The release workflow deliberately fails if any value is absent:
+The default GitHub Actions release workflow does not require Apple credentials or GitHub Secrets. It builds an ad-hoc signed universal DMG and uploads it to a GitHub Release. Users may need to approve the unsigned app in macOS Privacy & Security settings.
+
+For a signed and notarized distribution, configure the following repository Actions secrets:
 
 - `MACOS_CERTIFICATE_BASE64`: base64-encoded Developer ID Application certificate and private key exported as PKCS#12 (`.p12`).
 - `MACOS_CERTIFICATE_PASSWORD`: password used when exporting the `.p12`.

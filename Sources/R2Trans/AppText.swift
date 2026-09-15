@@ -116,6 +116,7 @@ enum AppText {
         case liveInterpreterError
         case liveInterpreterNoSource
         case liveInterpreterWaitingSubtitle
+        case liveInterpreterProvisionalSubtitles
         case liveInterpreterBillingNote
         case liveTranscription
         case liveTranscriptionTitle
@@ -224,7 +225,8 @@ enum AppText {
         .liveInterpreterError: "Live Interpreter Error",
         .liveInterpreterNoSource: "Source transcript will appear here.",
         .liveInterpreterWaitingSubtitle: "Translation subtitles will appear here.",
-        .liveInterpreterBillingNote: "Realtime translation sends audio to gpt-realtime-translate and may also send rolling transcript text to the Responses API. Both requests can incur usage charges. Free tier does not support gpt-realtime-translate.",
+        .liveInterpreterProvisionalSubtitles: "Fast provisional subtitles (Responses API)",
+        .liveInterpreterBillingNote: "Realtime translation sends audio to gpt-realtime-translate. When fast provisional subtitles are enabled, rolling transcript text is also sent to the Responses API and can incur separate usage charges. Free tier does not support gpt-realtime-translate.",
         .liveTranscription: "Live Transcription...",
         .liveTranscriptionTitle: "Live Transcription",
         .liveTranscriptionError: "Live Transcription Error",
@@ -332,7 +334,8 @@ enum AppText {
         .liveInterpreterError: "실시간 통역 오류",
         .liveInterpreterNoSource: "원문 transcript가 여기에 표시됩니다.",
         .liveInterpreterWaitingSubtitle: "번역 자막이 여기에 표시됩니다.",
-        .liveInterpreterBillingNote: "실시간 번역은 음성을 gpt-realtime-translate로 보내며, 임시 자막을 위해 누적 원문을 Responses API로 추가 전송할 수 있습니다. 두 요청 모두 사용량이 과금될 수 있고 Free tier는 gpt-realtime-translate를 지원하지 않습니다.",
+        .liveInterpreterProvisionalSubtitles: "빠른 임시 자막(Responses API)",
+        .liveInterpreterBillingNote: "실시간 번역은 음성을 gpt-realtime-translate로 보냅니다. 빠른 임시 자막을 켜면 누적 원문도 Responses API로 전송되어 별도 과금될 수 있습니다. Free tier는 gpt-realtime-translate를 지원하지 않습니다.",
         .liveTranscription: "실시간 전사...",
         .liveTranscriptionTitle: "실시간 전사",
         .liveTranscriptionError: "실시간 전사 오류",
@@ -440,7 +443,8 @@ enum AppText {
         .liveInterpreterError: "ライブ通訳エラー",
         .liveInterpreterNoSource: "原文の文字起こしがここに表示されます。",
         .liveInterpreterWaitingSubtitle: "翻訳字幕がここに表示されます。",
-        .liveInterpreterBillingNote: "リアルタイム翻訳では音声をgpt-realtime-translateへ送信し、仮字幕のために累積した文字起こしをResponses APIへ追加送信する場合があります。両方のリクエストに料金が発生する可能性があり、Free tierではgpt-realtime-translateを利用できません。",
+        .liveInterpreterProvisionalSubtitles: "高速な仮字幕（Responses API）",
+        .liveInterpreterBillingNote: "リアルタイム翻訳では音声をgpt-realtime-translateへ送信します。高速な仮字幕を有効にすると、累積した文字起こしもResponses APIへ送信され、別途料金が発生する場合があります。Free tierではgpt-realtime-translateを利用できません。",
         .liveTranscription: "リアルタイム文字起こし...",
         .liveTranscriptionTitle: "リアルタイム文字起こし",
         .liveTranscriptionError: "リアルタイム文字起こしエラー",
@@ -548,7 +552,8 @@ enum AppText {
         .liveInterpreterError: "实时口译错误",
         .liveInterpreterNoSource: "源文本转录将显示在这里。",
         .liveInterpreterWaitingSubtitle: "翻译字幕将显示在这里。",
-        .liveInterpreterBillingNote: "实时翻译会将音频发送到 gpt-realtime-translate，并可能为了临时字幕将累计转录文本额外发送到 Responses API。两种请求都可能产生费用，Free tier 不支持 gpt-realtime-translate。",
+        .liveInterpreterProvisionalSubtitles: "快速临时字幕（Responses API）",
+        .liveInterpreterBillingNote: "实时翻译会将音频发送到 gpt-realtime-translate。启用快速临时字幕时，累计转录文本也会发送到 Responses API，并可能单独计费。Free tier 不支持 gpt-realtime-translate。",
         .liveTranscription: "实时转录...",
         .liveTranscriptionTitle: "实时转录",
         .liveTranscriptionError: "实时转录错误",
