@@ -10,10 +10,7 @@ final class LiveInterpreterService {
     private var microphoneCapture: MicrophonePCM16AudioCapture?
     private var systemAudioCapture: SystemPCM16AudioCapture?
     private var audioMixer: PCM16AudioMixer?
-    private var sourceTranscript = ""
-    private var sourceTranscriptSinceOfficialOutput = ""
-    private var translatedSubtitle = ""
-    private var provisionalSubtitle = ""
+    private var transcript = LiveInterpreterTranscriptAccumulator()
     private var targetLanguageDisplayName = ""
     private var lastOfficialSubtitleUpdateTime: TimeInterval = 0
     private var lastAudioLevelUpdate: [LiveInterpreterAudioSource: TimeInterval] = [:]
@@ -45,6 +42,7 @@ final class LiveInterpreterService {
         self.provisionalSubtitlesEnabled = provisionalSubtitlesEnabled
         resetTranscriptState()
         targetLanguageDisplayName = SupportedLanguage.displayName(for: targetLanguageCode)
+        publishTranscript()
 
         let translationSession = makeTranslationSocket(
             targetLanguage: RealtimeTranslationLanguage(
@@ -153,8 +151,7 @@ final class LiveInterpreterService {
 
     func clear() {
         resetTranscriptState()
-        sendUpdate(.sourceTranscript(""))
-        sendUpdate(.subtitle("", languageLabel: ""))
+        sendUpdate(.transcript(LiveInterpreterTranscriptSnapshot(), languageLabel: ""))
         sendUpdate(.audioLevel(.microphone, 0))
         sendUpdate(.audioLevel(.systemAudio, 0))
     }
@@ -304,13 +301,8 @@ final class LiveInterpreterService {
 
         switch event {
         case .inputTranscriptDelta(let delta):
-            sourceTranscript = Self.trimmedTail(sourceTranscript + delta, limit: 50_000)
-            sourceTranscriptSinceOfficialOutput = Self.trimmedTail(
-                sourceTranscriptSinceOfficialOutput + delta,
-                limit: 2_000
-            )
-            let sourceDisplay = Self.trimmedTail(sourceTranscript, limit: 800)
-            sendUpdate(.sourceTranscript(Self.lineBrokenSentences(in: sourceDisplay)))
+            transcript.appendSource(delta)
+            publishTranscript()
             if provisionalSubtitlesEnabled {
                 requestProvisionalSubtitle(
                     targetLanguage: targetLanguage,
@@ -319,12 +311,10 @@ final class LiveInterpreterService {
                 )
             }
         case .outputTranscriptDelta(let delta):
-            translatedSubtitle = Self.trimmedTail(translatedSubtitle + delta, limit: 1_500)
-            provisionalSubtitle = ""
-            sourceTranscriptSinceOfficialOutput = ""
+            transcript.appendOfficial(delta)
             provisionalSubtitleTranslator.cancel()
             lastOfficialSubtitleUpdateTime = CFAbsoluteTimeGetCurrent()
-            publishSubtitle(preferProvisional: false)
+            publishTranscript()
         case .status(let message):
             sendUpdate(.status(message))
         case .debug(let message):
@@ -338,9 +328,9 @@ final class LiveInterpreterService {
         generation: Int
     ) {
         provisionalSubtitleTranslator.submit(
-            sourceTranscript: sourceTranscriptSinceOfficialOutput,
+            sourceTranscript: transcript.sourceSinceOfficialOutput,
             targetLanguageCode: targetLanguage.code
-        ) { [weak self] subtitle in
+        ) { [weak self, weak socket] subtitle in
             Task { @MainActor [weak self, weak socket] in
                 guard let self, let socket else {
                     return
@@ -351,34 +341,21 @@ final class LiveInterpreterService {
                 }
 
                 let officialAge = CFAbsoluteTimeGetCurrent() - self.lastOfficialSubtitleUpdateTime
-                guard self.translatedSubtitle.isEmpty || officialAge > 0.65 else {
+                guard self.transcript.officialHistory.isEmpty || officialAge > 0.65 else {
                     return
                 }
-                self.provisionalSubtitle = subtitle
-                self.publishSubtitle(preferProvisional: true)
+                self.transcript.setProvisional(subtitle)
+                self.publishTranscript()
             }
         }
     }
 
-    private func publishSubtitle(preferProvisional: Bool) {
-        let subtitle: String
-
-        if preferProvisional, !provisionalSubtitle.isEmpty {
-            subtitle = translatedSubtitle.isEmpty
-                ? provisionalSubtitle
-                : "\(translatedSubtitle)\n\(provisionalSubtitle)"
-        } else {
-            subtitle = translatedSubtitle
-        }
-
-        sendUpdate(.subtitle(Self.lineBrokenSentences(in: subtitle), languageLabel: targetLanguageDisplayName))
+    private func publishTranscript() {
+        sendUpdate(.transcript(transcript.snapshot, languageLabel: targetLanguageDisplayName))
     }
 
     private func resetTranscriptState() {
-        sourceTranscript = ""
-        sourceTranscriptSinceOfficialOutput = ""
-        translatedSubtitle = ""
-        provisionalSubtitle = ""
+        transcript.reset()
         lastOfficialSubtitleUpdateTime = 0
         lastAudioLevelUpdate = [:]
         audioChunkCount = 0
@@ -482,45 +459,6 @@ final class LiveInterpreterService {
 
     private func sendUpdate(_ update: LiveInterpreterUpdate) {
         onUpdate?(update)
-    }
-
-    private static func trimmedTail(_ value: String, limit: Int) -> String {
-        guard value.count > limit else {
-            return value
-        }
-
-        return String(value.suffix(limit))
-    }
-
-    private static func lineBrokenSentences(in text: String) -> String {
-        var result = ""
-        var previousWasLineBreak = false
-        let terminators = Set<Character>([".", "!", "?", "。", "！", "？"])
-
-        for character in text {
-            if character == "\n" {
-                if !previousWasLineBreak {
-                    result.append(character)
-                }
-                previousWasLineBreak = true
-                continue
-            }
-
-            if previousWasLineBreak, character.isWhitespace {
-                continue
-            }
-
-            result.append(character)
-
-            if terminators.contains(character) {
-                result.append("\n")
-                previousWasLineBreak = true
-            } else {
-                previousWasLineBreak = false
-            }
-        }
-
-        return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     nonisolated private static func audioLevel(for data: Data) -> Double {
@@ -693,8 +631,7 @@ private final class ProvisionalLiveSubtitleTranslator: @unchecked Sendable {
 enum LiveInterpreterUpdate: Sendable {
     case runningStateChanged(Bool)
     case status(String)
-    case sourceTranscript(String)
-    case subtitle(String, languageLabel: String)
+    case transcript(LiveInterpreterTranscriptSnapshot, languageLabel: String)
     case audioLevel(LiveInterpreterAudioSource, Double)
     case debug(String)
     case error(String)

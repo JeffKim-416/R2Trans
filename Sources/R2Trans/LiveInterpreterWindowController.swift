@@ -8,11 +8,9 @@ final class LiveInterpreterWindowController: NSWindowController, NSWindowDelegat
         static let contentInset: CGFloat = 20
         static let formLabelWidth: CGFloat = 116
         static let formControlWidth: CGFloat = 420
-        static let formRowSpacing: CGFloat = 12
+        static let formRowSpacing: CGFloat = 8
         static let formWidth: CGFloat = 600
         static let meterLabelWidth: CGFloat = 116
-        static let transcriptSpacing: CGFloat = 16
-        static let transcriptMinHeight: CGFloat = 280
     }
 
     private let service = LiveInterpreterService()
@@ -34,13 +32,35 @@ final class LiveInterpreterWindowController: NSWindowController, NSWindowDelegat
     private let systemAudioLevelLabel = NSTextField(labelWithString: "")
     private let microphoneWaveView = AudioWaveView()
     private let systemAudioWaveView = AudioWaveView()
-    private let transcriptPanelTitleLabel = NSTextField(labelWithString: "")
-    private let sourceTranscriptTitleLabel = NSTextField(labelWithString: "")
-    private let translatedSubtitleTitleLabel = NSTextField(labelWithString: "")
     private let sourceTranscriptScrollView = TranscriptScrollView()
     private let sourceTranscriptTextView = NSTextView()
     private let subtitleScrollView = TranscriptScrollView()
     private let subtitleTextView = NSTextView()
+    private let latestSourceTitleLabel = NSTextField(labelWithString: "")
+    private let latestSourceTextLabel = NSTextField(wrappingLabelWithString: "")
+    private let latestSubtitleTitleLabel = NSTextField(labelWithString: "")
+    private let latestSubtitleStateLabel = NSTextField(labelWithString: "")
+    private let historyTitleLabel = NSTextField(labelWithString: "")
+    private let historyLanguagePicker = NSSegmentedControl()
+    private let jumpToLatestButton = NSButton()
+    private let historyDisclosureButton = NSButton()
+    private let decreaseTextButton = NSButton()
+    private let increaseTextButton = NSButton()
+    private let captionLegendLabel = NSTextField(labelWithString: "")
+    private let settingsDisclosureButton = NSButton()
+    private var settingsPane: NSView?
+    private var isSettingsExpanded = true
+    private var isHistoryAtLatest = true
+    private var hasNewHistory = false
+    private var isHistoryExpanded = false
+    private var subtitleTextSize: CGFloat = 30
+    private var latestOfficialText = ""
+    private var latestProvisionalText = ""
+    private var transcriptSnapshot = LiveInterpreterTranscriptSnapshot()
+    private var renderedHistory = ""
+    private var historyShowsTranslation = true
+    private var isUpdatingHistory = false
+    private var historyHeightConstraint: NSLayoutConstraint?
     private let debugLabel = NSTextField(labelWithString: "")
     private let startStopButton = NSButton()
     private let clearButton = NSButton()
@@ -76,18 +96,22 @@ final class LiveInterpreterWindowController: NSWindowController, NSWindowDelegat
         fatalError("init(coder:) has not been implemented")
     }
 
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
     private func setupContent() {
         guard let contentView = window?.contentView else {
             return
         }
 
-        let controlsPane = NSView()
-        controlsPane.translatesAutoresizingMaskIntoConstraints = false
+        settingsDisclosureButton.bezelStyle = .rounded
+        settingsDisclosureButton.isBordered = false
+        settingsDisclosureButton.target = self
+        settingsDisclosureButton.action = #selector(toggleSettings)
+        settingsDisclosureButton.setContentHuggingPriority(.required, for: .horizontal)
 
-        let transcriptPane = NSView()
-        transcriptPane.translatesAutoresizingMaskIntoConstraints = false
-
-        let headerStack = NSStackView(views: [statusLabel, targetLanguageLabel])
+        let headerStack = NSStackView(views: [statusLabel, targetLanguageLabel, settingsDisclosureButton])
         headerStack.orientation = .horizontal
         headerStack.alignment = .centerY
         headerStack.distribution = .fill
@@ -178,24 +202,64 @@ final class LiveInterpreterWindowController: NSWindowController, NSWindowDelegat
 
         let audioLevelRow = makeFormRow(label: audioLevelLabel, control: meterStack)
 
-        let controlsStack = NSStackView(views: [
-            headerStack,
+        let settingsStack = NSStackView(views: [
             inputSourceRow,
             audioApplicationRow,
             translationLanguageRow,
             provisionalSubtitlesRow,
             audioLevelRow
         ])
-        controlsStack.orientation = .vertical
-        controlsStack.alignment = .centerX
-        controlsStack.spacing = Layout.formRowSpacing
-        controlsStack.translatesAutoresizingMaskIntoConstraints = false
-        controlsStack.widthAnchor.constraint(equalToConstant: Layout.formWidth).isActive = true
+        settingsStack.orientation = .vertical
+        settingsStack.alignment = .centerX
+        settingsStack.spacing = Layout.formRowSpacing
+        settingsStack.translatesAutoresizingMaskIntoConstraints = false
+        settingsStack.widthAnchor.constraint(equalToConstant: Layout.formWidth).isActive = true
 
-        configureTranscriptTextView(sourceTranscriptTextView, fontSize: 18, weight: .regular)
+        configureTranscriptTextView(sourceTranscriptTextView, fontSize: 15, weight: .regular)
         configureTranscriptScrollView(sourceTranscriptScrollView, textView: sourceTranscriptTextView)
-        configureTranscriptTextView(subtitleTextView, fontSize: 18, weight: .regular)
+        configureTranscriptTextView(subtitleTextView, fontSize: subtitleTextSize, weight: .bold)
         configureTranscriptScrollView(subtitleScrollView, textView: subtitleTextView)
+
+        latestSourceTitleLabel.font = .systemFont(ofSize: 12, weight: .semibold)
+        latestSourceTitleLabel.textColor = .secondaryLabelColor
+        latestSourceTextLabel.font = .systemFont(ofSize: 18, weight: .regular)
+        latestSourceTextLabel.textColor = .secondaryLabelColor
+        latestSourceTextLabel.maximumNumberOfLines = 2
+        latestSourceTextLabel.lineBreakMode = .byTruncatingHead
+        latestSourceTextLabel.isSelectable = true
+        latestSubtitleTitleLabel.font = .systemFont(ofSize: 12, weight: .semibold)
+        latestSubtitleTitleLabel.textColor = .secondaryLabelColor
+        latestSubtitleStateLabel.font = .systemFont(ofSize: 12, weight: .medium)
+        latestSubtitleStateLabel.textColor = .secondaryLabelColor
+        historyTitleLabel.font = .systemFont(ofSize: 12, weight: .semibold)
+        historyTitleLabel.textColor = .secondaryLabelColor
+        captionLegendLabel.font = .systemFont(ofSize: 11)
+        captionLegendLabel.textColor = .tertiaryLabelColor
+        jumpToLatestButton.bezelStyle = .rounded
+        jumpToLatestButton.target = self
+        jumpToLatestButton.action = #selector(jumpToLatest)
+        jumpToLatestButton.isHidden = true
+        historyDisclosureButton.bezelStyle = .rounded
+        historyDisclosureButton.isBordered = false
+        historyDisclosureButton.target = self
+        historyDisclosureButton.action = #selector(toggleHistory)
+        decreaseTextButton.bezelStyle = .rounded
+        decreaseTextButton.title = "A−"
+        decreaseTextButton.toolTip = AppText.text(.liveSmallerText)
+        decreaseTextButton.target = self
+        decreaseTextButton.action = #selector(decreaseSubtitleText)
+        increaseTextButton.bezelStyle = .rounded
+        increaseTextButton.title = "A+"
+        increaseTextButton.toolTip = AppText.text(.liveLargerText)
+        increaseTextButton.target = self
+        increaseTextButton.action = #selector(increaseSubtitleText)
+        historyLanguagePicker.segmentCount = 2
+        historyLanguagePicker.trackingMode = .selectOne
+        historyLanguagePicker.selectedSegment = 1
+        historyLanguagePicker.translatesAutoresizingMaskIntoConstraints = false
+        historyLanguagePicker.widthAnchor.constraint(equalToConstant: 118).isActive = true
+        historyLanguagePicker.target = self
+        historyLanguagePicker.action = #selector(historyLanguageDidChange)
 
         let transcriptPanel = makeTranscriptPanel()
 
@@ -235,53 +299,33 @@ final class LiveInterpreterWindowController: NSWindowController, NSWindowDelegat
         billingNoteLabel.maximumNumberOfLines = 0
         billingNoteLabel.setContentCompressionResistancePriority(.required, for: .vertical)
 
-        let controlsSpacer = NSView()
-        controlsSpacer.setContentHuggingPriority(.defaultLow, for: .vertical)
-
-        let controlsPaneStack = NSStackView(views: [
-            makeFullWidthContainer(for: controlsStack, centered: true),
-            controlsSpacer,
+        let settingsPane = NSStackView(views: [
+            makeFullWidthContainer(for: settingsStack, centered: true),
             debugLabel,
-            buttonStack,
             billingNoteLabel
         ])
-        controlsPaneStack.orientation = .vertical
-        controlsPaneStack.alignment = .width
-        controlsPaneStack.spacing = 8
-        controlsPaneStack.edgeInsets = NSEdgeInsets(
+        settingsPane.orientation = .vertical
+        settingsPane.alignment = .width
+        settingsPane.spacing = 8
+        self.settingsPane = settingsPane
+
+        let rootStack = NSStackView(views: [headerStack, settingsPane, transcriptPanel, buttonStack])
+        rootStack.orientation = .vertical
+        rootStack.alignment = .width
+        rootStack.spacing = 12
+        rootStack.edgeInsets = NSEdgeInsets(
             top: Layout.contentInset,
             left: Layout.contentInset,
             bottom: Layout.contentInset,
             right: Layout.contentInset
         )
-        controlsPaneStack.translatesAutoresizingMaskIntoConstraints = false
-
-        controlsPane.addSubview(controlsPaneStack)
-        transcriptPane.addSubview(transcriptPanel)
-
-        contentView.addSubview(controlsPane)
-        contentView.addSubview(transcriptPane)
-
+        rootStack.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(rootStack)
         NSLayoutConstraint.activate([
-            controlsPane.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
-            controlsPane.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
-            controlsPane.topAnchor.constraint(equalTo: contentView.topAnchor),
-            controlsPane.heightAnchor.constraint(equalToConstant: 365),
-
-            transcriptPane.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
-            transcriptPane.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
-            transcriptPane.topAnchor.constraint(equalTo: controlsPane.bottomAnchor),
-            transcriptPane.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
-
-            controlsPaneStack.leadingAnchor.constraint(equalTo: controlsPane.leadingAnchor),
-            controlsPaneStack.trailingAnchor.constraint(equalTo: controlsPane.trailingAnchor),
-            controlsPaneStack.topAnchor.constraint(equalTo: controlsPane.topAnchor),
-            controlsPaneStack.bottomAnchor.constraint(equalTo: controlsPane.bottomAnchor),
-
-            transcriptPanel.leadingAnchor.constraint(equalTo: transcriptPane.leadingAnchor),
-            transcriptPanel.trailingAnchor.constraint(equalTo: transcriptPane.trailingAnchor),
-            transcriptPanel.topAnchor.constraint(equalTo: transcriptPane.topAnchor),
-            transcriptPanel.bottomAnchor.constraint(equalTo: transcriptPane.bottomAnchor)
+            rootStack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            rootStack.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            rootStack.topAnchor.constraint(equalTo: contentView.topAnchor),
+            rootStack.bottomAnchor.constraint(equalTo: contentView.bottomAnchor)
         ])
 
         Task {
@@ -312,18 +356,8 @@ final class LiveInterpreterWindowController: NSWindowController, NSWindowDelegat
                 self.applyRunningState(isRunning)
             case .status(let status):
                 self.statusLabel.stringValue = status
-            case .sourceTranscript(let transcript):
-                self.updateTranscriptTextView(
-                    self.sourceTranscriptTextView,
-                    in: self.sourceTranscriptScrollView,
-                    text: transcript.isEmpty ? AppText.text(.liveInterpreterNoSource) : transcript
-                )
-            case .subtitle(let subtitle, let languageLabel):
-                self.updateTranscriptTextView(
-                    self.subtitleTextView,
-                    in: self.subtitleScrollView,
-                    text: subtitle.isEmpty ? AppText.text(.liveInterpreterWaitingSubtitle) : subtitle
-                )
+            case .transcript(let snapshot, let languageLabel):
+                self.updateTranscript(snapshot)
                 self.targetLanguageLabel.stringValue = languageLabel.isEmpty ? "" : "\(AppText.text(.targetLanguage)): \(languageLabel)"
             case .audioLevel(let source, let level):
                 self.updateAudioLevel(source, level: level)
@@ -346,9 +380,30 @@ final class LiveInterpreterWindowController: NSWindowController, NSWindowDelegat
         audioLevelLabel.stringValue = AppText.text(.audioLevel)
         microphoneLevelLabel.stringValue = AppText.text(.microphoneLevel)
         systemAudioLevelLabel.stringValue = AppText.text(.systemAudioLevel)
-        transcriptPanelTitleLabel.stringValue = AppText.text(.translatedSubtitle)
-        sourceTranscriptTitleLabel.stringValue = AppText.text(.sourceTranscript)
-        translatedSubtitleTitleLabel.stringValue = AppText.text(.translatedSubtitle)
+        latestSourceTitleLabel.stringValue = AppText.text(.liveRecentSource)
+        latestSubtitleTitleLabel.stringValue = AppText.text(.liveFocusTitle)
+        historyTitleLabel.stringValue = AppText.text(.liveHistory)
+        captionLegendLabel.stringValue = AppText.text(.liveCaptionLegend)
+        historyLanguagePicker.setLabel(AppText.text(.liveHistorySource), forSegment: 0)
+        historyLanguagePicker.setLabel(AppText.text(.liveHistoryTranslation), forSegment: 1)
+        settingsDisclosureButton.title = isSettingsExpanded
+            ? AppText.text(.liveHideSettings)
+            : AppText.text(.liveShowSettings)
+        jumpToLatestButton.title = hasNewHistory
+            ? AppText.text(.liveNewHistory)
+            : AppText.text(.liveJumpToLatest)
+        historyDisclosureButton.title = isHistoryExpanded
+            ? AppText.text(.liveHideHistory)
+            : AppText.text(.liveShowHistory)
+        decreaseTextButton.toolTip = AppText.text(.liveSmallerText)
+        increaseTextButton.toolTip = AppText.text(.liveLargerText)
+        latestSourceTitleLabel.toolTip = AppText.text(.liveRecentSourceHelp)
+        renderedHistory = ""
+        updateTranscriptHistory(
+            sourceHistory: transcriptSnapshot.sourceHistory,
+            officialHistory: transcriptSnapshot.officialHistory,
+            historyTruncated: transcriptSnapshot.historyTruncated
+        )
         inputSourcePopup.removeAllItems()
         inputSourcePopup.addItems(withTitles: LiveInterpreterInputSource.allCases.map(\.displayName))
         inputSourcePopup.selectItem(at: 0)
@@ -363,16 +418,12 @@ final class LiveInterpreterWindowController: NSWindowController, NSWindowDelegat
         closeButton.title = AppText.text(.close)
         billingNoteLabel.stringValue = AppText.text(.liveInterpreterBillingNote)
         statusLabel.stringValue = AppText.text(.liveInterpreterStopped)
-        updateTranscriptTextView(
-            sourceTranscriptTextView,
-            in: sourceTranscriptScrollView,
-            text: AppText.text(.liveInterpreterNoSource)
-        )
-        updateTranscriptTextView(
-            subtitleTextView,
-            in: subtitleScrollView,
-            text: AppText.text(.liveInterpreterWaitingSubtitle)
-        )
+        if latestSourceTextLabel.stringValue.isEmpty {
+            latestSourceTextLabel.stringValue = AppText.text(.liveInterpreterNoSource)
+        }
+        if subtitleTextView.string.isEmpty {
+            updateLatestSubtitle(official: "", provisional: "")
+        }
         debugLabel.stringValue = ""
         refreshAudioApplicationAvailability()
         refreshMeterAvailability()
@@ -434,6 +485,9 @@ final class LiveInterpreterWindowController: NSWindowController, NSWindowDelegat
                 }
                 isStarting = false
                 startTask = nil
+                if service.isRunning && isSettingsExpanded {
+                    toggleSettings()
+                }
                 applyRunningState(service.isRunning)
             } catch is CancellationError {
                 guard generation == startGeneration else {
@@ -538,73 +592,289 @@ final class LiveInterpreterWindowController: NSWindowController, NSWindowDelegat
         scrollView.translatesAutoresizingMaskIntoConstraints = false
     }
 
-    private func updateTranscriptTextView(
-        _ textView: NSTextView,
-        in scrollView: TranscriptScrollView,
-        text: String
+    private func updateTranscript(_ snapshot: LiveInterpreterTranscriptSnapshot) {
+        transcriptSnapshot = snapshot
+        latestSourceTextLabel.stringValue = snapshot.latestSource.isEmpty
+            ? AppText.text(.liveInterpreterNoSource)
+            : snapshot.latestSource
+        latestOfficialText = snapshot.latestOfficial
+        latestProvisionalText = snapshot.provisional
+        updateLatestSubtitle(official: snapshot.latestOfficial, provisional: snapshot.provisional)
+        updateTranscriptHistory(
+            sourceHistory: snapshot.sourceHistory,
+            officialHistory: snapshot.officialHistory,
+            historyTruncated: snapshot.historyTruncated
+        )
+    }
+
+    private func updateLatestSubtitle(official: String, provisional: String) {
+        let attributed = NSMutableAttributedString()
+        if !official.isEmpty {
+            attributed.append(NSAttributedString(
+                string: official,
+                attributes: [
+                    .font: NSFont.systemFont(ofSize: subtitleTextSize, weight: .bold),
+                    .foregroundColor: NSColor.labelColor
+                ]
+            ))
+        } else if provisional.isEmpty {
+            attributed.append(NSAttributedString(
+                string: AppText.text(.liveInterpreterWaitingSubtitle),
+                attributes: [
+                    .font: NSFont.systemFont(ofSize: subtitleTextSize, weight: .regular),
+                    .foregroundColor: NSColor.secondaryLabelColor
+                ]
+            ))
+        }
+
+        if !provisional.isEmpty {
+            if !attributed.string.isEmpty {
+                attributed.append(NSAttributedString(string: "\n"))
+            }
+            attributed.append(NSAttributedString(
+                string: "\(AppText.text(.liveProvisionalSubtitle))  \(provisional)",
+                attributes: [
+                    .font: NSFont.systemFont(ofSize: max(21, subtitleTextSize - 4), weight: .regular),
+                    .foregroundColor: NSColor.secondaryLabelColor
+                ]
+            ))
+        }
+
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.lineSpacing = 5
+        paragraphStyle.paragraphSpacing = 12
+        attributed.addAttribute(.paragraphStyle, value: paragraphStyle, range: NSRange(location: 0, length: attributed.length))
+        subtitleTextView.textStorage?.setAttributedString(attributed)
+        subtitleScrollView.resizeDocumentViewToContentWidth()
+        // The focus panel always follows live speech. Review belongs to history.
+        subtitleTextView.scrollToEndOfDocument(nil)
+        latestSubtitleStateLabel.stringValue = provisional.isEmpty
+            ? AppText.text(.liveOfficialSubtitle)
+            : AppText.text(.liveProvisionalSubtitle)
+        latestSubtitleStateLabel.isHidden = official.isEmpty && provisional.isEmpty
+        latestSubtitleStateLabel.textColor = provisional.isEmpty ? .secondaryLabelColor : .controlAccentColor
+    }
+
+    private func updateTranscriptHistory(
+        sourceHistory: String,
+        officialHistory: String,
+        historyTruncated: Bool
     ) {
-        let wasAtBottom = scrollView.documentVisibleRect.maxY >= textView.bounds.maxY - 24
-        textView.string = text
-        scrollView.resizeDocumentViewToContentWidth()
-        if wasAtBottom {
-            textView.scrollToEndOfDocument(nil)
+        let selectedHistory = historyShowsTranslation ? officialHistory : sourceHistory
+        let renderKey = "\(historyShowsTranslation ? "translation" : "source")|\(historyTruncated)|\(selectedHistory)"
+        guard renderKey != renderedHistory else {
+            return
+        }
+        renderedHistory = renderKey
+        let wasAtBottom = isHistoryAtLatest
+        let previousOrigin = sourceTranscriptScrollView.contentView.bounds.origin
+        isUpdatingHistory = true
+        defer { isUpdatingHistory = false }
+        let attributed = NSMutableAttributedString()
+        let headingAttributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 12, weight: .semibold),
+            .foregroundColor: NSColor.secondaryLabelColor
+        ]
+        let sourceAttributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 15, weight: .regular),
+            .foregroundColor: NSColor.secondaryLabelColor
+        ]
+        let officialAttributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 18, weight: .bold),
+            .foregroundColor: NSColor.labelColor
+        ]
+
+        if selectedHistory.isEmpty {
+            attributed.append(NSAttributedString(
+                string: AppText.text(.liveHistoryEmpty),
+                attributes: sourceAttributes
+            ))
+        } else {
+            let heading = historyShowsTranslation
+                ? AppText.text(.liveHistoryTranslation)
+                : AppText.text(.liveHistorySource)
+            let attributes = historyShowsTranslation ? officialAttributes : sourceAttributes
+            attributed.append(NSAttributedString(string: "\(heading)\n", attributes: headingAttributes))
+            attributed.append(NSAttributedString(string: selectedHistory, attributes: attributes))
+            if historyTruncated {
+                attributed.append(NSAttributedString(
+                    string: "\n\n\(AppText.text(.liveHistoryLimit))",
+                    attributes: [
+                        .font: NSFont.systemFont(ofSize: 11),
+                        .foregroundColor: NSColor.tertiaryLabelColor
+                    ]
+                ))
+            }
+        }
+
+        sourceTranscriptTextView.textStorage?.setAttributedString(attributed)
+        sourceTranscriptScrollView.resizeDocumentViewToContentWidth()
+        if selectedHistory.isEmpty {
+            isHistoryAtLatest = true
+            hasNewHistory = false
+        } else if wasAtBottom {
+            sourceTranscriptTextView.scrollToEndOfDocument(nil)
+            hasNewHistory = false
+        } else if !sourceHistory.isEmpty || !officialHistory.isEmpty {
+            hasNewHistory = true
+            sourceTranscriptScrollView.contentView.scroll(to: previousOrigin)
+            sourceTranscriptScrollView.reflectScrolledClipView(sourceTranscriptScrollView.contentView)
+        }
+        jumpToLatestButton.isHidden = !isHistoryExpanded || !hasNewHistory
+        jumpToLatestButton.title = hasNewHistory
+            ? AppText.text(.liveNewHistory)
+            : AppText.text(.liveJumpToLatest)
+    }
+
+    @objc private func jumpToLatest() {
+        isHistoryAtLatest = true
+        hasNewHistory = false
+        jumpToLatestButton.isHidden = true
+        sourceTranscriptTextView.scrollToEndOfDocument(nil)
+    }
+
+    @objc private func historyLanguageDidChange() {
+        historyShowsTranslation = historyLanguagePicker.selectedSegment == 1
+        isHistoryAtLatest = true
+        renderedHistory = ""
+        updateTranscriptHistory(
+            sourceHistory: transcriptSnapshot.sourceHistory,
+            officialHistory: transcriptSnapshot.officialHistory,
+            historyTruncated: transcriptSnapshot.historyTruncated
+        )
+    }
+
+    @objc private func historyScrollViewDidScroll() {
+        guard !isUpdatingHistory, isHistoryExpanded else { return }
+        let isAtBottom = sourceTranscriptScrollView.documentVisibleRect.maxY
+            >= sourceTranscriptTextView.bounds.maxY - 24
+        isHistoryAtLatest = isAtBottom
+        if isAtBottom {
+            hasNewHistory = false
+            jumpToLatestButton.isHidden = true
         }
     }
 
+    @objc private func toggleSettings() {
+        isSettingsExpanded.toggle()
+        settingsPane?.isHidden = !isSettingsExpanded
+        settingsDisclosureButton.title = isSettingsExpanded
+            ? AppText.text(.liveHideSettings)
+            : AppText.text(.liveShowSettings)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.2
+            window?.layoutIfNeeded()
+        }
+    }
+
+    @objc private func toggleHistory() {
+        isHistoryExpanded.toggle()
+        historyHeightConstraint?.constant = isHistoryExpanded ? 180 : 0
+        historyDisclosureButton.title = isHistoryExpanded
+            ? AppText.text(.liveHideHistory)
+            : AppText.text(.liveShowHistory)
+        sourceTranscriptScrollView.isHidden = !isHistoryExpanded
+        jumpToLatestButton.isHidden = !isHistoryExpanded || !hasNewHistory
+        window?.contentView?.layoutSubtreeIfNeeded()
+    }
+
+    @objc private func decreaseSubtitleText() {
+        subtitleTextSize = max(24, subtitleTextSize - 2)
+        updateLatestSubtitle(official: latestOfficialText, provisional: latestProvisionalText)
+    }
+
+    @objc private func increaseSubtitleText() {
+        subtitleTextSize = min(40, subtitleTextSize + 2)
+        updateLatestSubtitle(official: latestOfficialText, provisional: latestProvisionalText)
+    }
+
     private func makeTranscriptPanel() -> NSView {
-        transcriptPanelTitleLabel.font = .systemFont(ofSize: 12, weight: .semibold)
-        transcriptPanelTitleLabel.textColor = .secondaryLabelColor
-
-        sourceTranscriptTitleLabel.font = .systemFont(ofSize: 12, weight: .semibold)
-        sourceTranscriptTitleLabel.textColor = .secondaryLabelColor
-
-        translatedSubtitleTitleLabel.font = .systemFont(ofSize: 12, weight: .semibold)
-        translatedSubtitleTitleLabel.textColor = .secondaryLabelColor
-
-        transcriptPanelTitleLabel.translatesAutoresizingMaskIntoConstraints = false
-        sourceTranscriptTitleLabel.translatesAutoresizingMaskIntoConstraints = false
-        translatedSubtitleTitleLabel.translatesAutoresizingMaskIntoConstraints = false
-
         let panel = NSView()
         panel.wantsLayer = true
         panel.layer?.borderColor = NSColor.separatorColor.cgColor
         panel.layer?.borderWidth = 1
         panel.translatesAutoresizingMaskIntoConstraints = false
+        panel.setContentHuggingPriority(.defaultLow, for: .vertical)
+        panel.setContentCompressionResistancePriority(.required, for: .vertical)
+        panel.heightAnchor.constraint(greaterThanOrEqualToConstant: 260).isActive = true
 
-        [
-            transcriptPanelTitleLabel,
-            sourceTranscriptTitleLabel,
-            sourceTranscriptScrollView,
-            translatedSubtitleTitleLabel,
-            subtitleScrollView
-        ].forEach(panel.addSubview)
+        let latestPanel = NSView()
+        latestPanel.wantsLayer = true
+        latestPanel.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+        latestPanel.layer?.cornerRadius = 10
+        latestPanel.translatesAutoresizingMaskIntoConstraints = false
+        panel.addSubview(latestPanel)
+
+        [latestSourceTitleLabel, latestSourceTextLabel, latestSubtitleTitleLabel, latestSubtitleStateLabel, subtitleScrollView].forEach(latestPanel.addSubview)
+
+        let historyHeaderSpacer = NSView()
+        historyHeaderSpacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        let historyHeader = NSStackView(views: [
+            historyTitleLabel,
+            historyLanguagePicker,
+            historyHeaderSpacer,
+            decreaseTextButton,
+            increaseTextButton,
+            jumpToLatestButton,
+            historyDisclosureButton
+        ])
+        historyHeader.orientation = .horizontal
+        historyHeader.alignment = .centerY
+        historyHeader.spacing = 8
+        historyHeader.translatesAutoresizingMaskIntoConstraints = false
+        panel.addSubview(historyHeader)
+        panel.addSubview(sourceTranscriptScrollView)
+
+        latestSourceTitleLabel.translatesAutoresizingMaskIntoConstraints = false
+        latestSourceTextLabel.translatesAutoresizingMaskIntoConstraints = false
+        latestSubtitleTitleLabel.translatesAutoresizingMaskIntoConstraints = false
+        latestSubtitleStateLabel.translatesAutoresizingMaskIntoConstraints = false
 
         let inset: CGFloat = 16
-        let spacing: CGFloat = 8
-
+        let spacing: CGFloat = 7
         NSLayoutConstraint.activate([
-            transcriptPanelTitleLabel.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: inset),
-            transcriptPanelTitleLabel.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -inset),
-            transcriptPanelTitleLabel.topAnchor.constraint(equalTo: panel.topAnchor, constant: inset),
+            latestPanel.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: inset),
+            latestPanel.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -inset),
+            latestPanel.topAnchor.constraint(equalTo: panel.topAnchor, constant: inset),
+            latestPanel.heightAnchor.constraint(greaterThanOrEqualToConstant: 188),
 
-            sourceTranscriptTitleLabel.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: inset),
-            sourceTranscriptTitleLabel.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -inset),
-            sourceTranscriptTitleLabel.topAnchor.constraint(equalTo: transcriptPanelTitleLabel.bottomAnchor, constant: spacing),
+            latestSourceTitleLabel.leadingAnchor.constraint(equalTo: latestPanel.leadingAnchor, constant: inset),
+            latestSourceTitleLabel.trailingAnchor.constraint(equalTo: latestPanel.trailingAnchor, constant: -inset),
+            latestSourceTitleLabel.topAnchor.constraint(equalTo: latestPanel.topAnchor, constant: inset),
+            latestSourceTextLabel.leadingAnchor.constraint(equalTo: latestSourceTitleLabel.leadingAnchor),
+            latestSourceTextLabel.trailingAnchor.constraint(equalTo: latestSourceTitleLabel.trailingAnchor),
+            latestSourceTextLabel.topAnchor.constraint(equalTo: latestSourceTitleLabel.bottomAnchor, constant: 4),
+            latestSubtitleTitleLabel.leadingAnchor.constraint(equalTo: latestSourceTitleLabel.leadingAnchor),
+            latestSubtitleTitleLabel.topAnchor.constraint(equalTo: latestSourceTextLabel.bottomAnchor, constant: 14),
+            latestSubtitleStateLabel.leadingAnchor.constraint(equalTo: latestSubtitleTitleLabel.trailingAnchor, constant: 8),
+            latestSubtitleStateLabel.centerYAnchor.constraint(equalTo: latestSubtitleTitleLabel.centerYAnchor),
+            subtitleScrollView.leadingAnchor.constraint(equalTo: latestSourceTitleLabel.leadingAnchor),
+            subtitleScrollView.trailingAnchor.constraint(equalTo: latestSourceTitleLabel.trailingAnchor),
+            subtitleScrollView.topAnchor.constraint(equalTo: latestSubtitleTitleLabel.bottomAnchor, constant: spacing),
+            subtitleScrollView.bottomAnchor.constraint(equalTo: latestPanel.bottomAnchor, constant: -inset),
 
-            sourceTranscriptScrollView.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
-            sourceTranscriptScrollView.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
-            sourceTranscriptScrollView.topAnchor.constraint(equalTo: sourceTranscriptTitleLabel.bottomAnchor, constant: spacing),
-            sourceTranscriptScrollView.heightAnchor.constraint(equalTo: panel.heightAnchor, multiplier: 0.28),
-
-            translatedSubtitleTitleLabel.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: inset),
-            translatedSubtitleTitleLabel.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -inset),
-            translatedSubtitleTitleLabel.topAnchor.constraint(equalTo: sourceTranscriptScrollView.bottomAnchor, constant: spacing),
-
-            subtitleScrollView.leadingAnchor.constraint(equalTo: panel.leadingAnchor),
-            subtitleScrollView.trailingAnchor.constraint(equalTo: panel.trailingAnchor),
-            subtitleScrollView.topAnchor.constraint(equalTo: translatedSubtitleTitleLabel.bottomAnchor, constant: spacing),
-            subtitleScrollView.bottomAnchor.constraint(equalTo: panel.bottomAnchor)
+            historyHeader.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: inset),
+            historyHeader.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -inset),
+            historyHeader.topAnchor.constraint(equalTo: latestPanel.bottomAnchor, constant: 14),
+            sourceTranscriptScrollView.leadingAnchor.constraint(equalTo: panel.leadingAnchor, constant: inset),
+            sourceTranscriptScrollView.trailingAnchor.constraint(equalTo: panel.trailingAnchor, constant: -inset),
+            sourceTranscriptScrollView.topAnchor.constraint(equalTo: historyHeader.bottomAnchor, constant: spacing),
+            sourceTranscriptScrollView.bottomAnchor.constraint(equalTo: panel.bottomAnchor, constant: -inset)
         ])
+
+        historyHeightConstraint = sourceTranscriptScrollView.heightAnchor.constraint(equalToConstant: 180)
+        historyHeightConstraint?.priority = .defaultLow
+        historyHeightConstraint?.isActive = true
+        sourceTranscriptScrollView.isHidden = !isHistoryExpanded
+        historyHeightConstraint?.constant = isHistoryExpanded ? 180 : 0
+
+        sourceTranscriptScrollView.contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(historyScrollViewDidScroll),
+            name: NSView.boundsDidChangeNotification,
+            object: sourceTranscriptScrollView.contentView
+        )
 
         return panel
     }

@@ -129,6 +129,25 @@ enum AppText {
         case liveTranscriptionBillingNote
         case spokenLanguage
         case automaticLanguage
+        case liveFocusTitle
+        case liveOfficialSubtitle
+        case liveProvisionalSubtitle
+        case liveRecentSource
+        case liveHistory
+        case liveShowSettings
+        case liveHideSettings
+        case liveShowHistory
+        case liveHideHistory
+        case liveJumpToLatest
+        case liveNewHistory
+        case liveHistoryLimit
+        case liveHistoryEmpty
+        case liveLargerText
+        case liveSmallerText
+        case liveHistoryTranslation
+        case liveHistorySource
+        case liveCaptionLegend
+        case liveRecentSourceHelp
     }
 
     private static let english: [Key: String] = [
@@ -241,7 +260,26 @@ enum AppText {
         .liveTranscriptionNoTranscript: "Live transcript will appear here.",
         .liveTranscriptionBillingNote: "Live transcription uses gpt-live-transcribe and is billed by audio duration. Free tier is not supported.",
         .spokenLanguage: "Spoken language",
-        .automaticLanguage: "Auto"
+        .automaticLanguage: "Auto",
+        .liveFocusTitle: "Now translating",
+        .liveOfficialSubtitle: "Official",
+        .liveProvisionalSubtitle: "Provisional",
+        .liveRecentSource: "Latest source",
+        .liveHistory: "Recent history",
+        .liveShowSettings: "Show settings",
+        .liveHideSettings: "Hide settings",
+        .liveShowHistory: "Show history",
+        .liveHideHistory: "Hide history",
+        .liveJumpToLatest: "Jump to latest",
+        .liveNewHistory: "New text · Jump to latest",
+        .liveHistoryLimit: "History keeps the latest 50,000 characters per language in this window. Older text is removed.",
+        .liveHistoryEmpty: "History will appear when speech is received.",
+        .liveLargerText: "Increase subtitle size",
+        .liveSmallerText: "Decrease subtitle size",
+        .liveHistoryTranslation: "Translation",
+        .liveHistorySource: "Source",
+        .liveCaptionLegend: "Official: bold · Provisional: regular",
+        .liveRecentSourceHelp: "Source and translation arrive separately and may not be aligned sentence by sentence."
     ]
 
     private static let korean: [Key: String] = [
@@ -354,7 +392,26 @@ enum AppText {
         .liveTranscriptionNoTranscript: "실시간 전사 내용이 여기에 표시됩니다.",
         .liveTranscriptionBillingNote: "실시간 전사는 gpt-live-transcribe를 사용하며 오디오 시간 기준으로 과금됩니다. Free tier는 지원되지 않습니다.",
         .spokenLanguage: "음성 언어",
-        .automaticLanguage: "자동"
+        .automaticLanguage: "자동",
+        .liveFocusTitle: "지금 번역",
+        .liveOfficialSubtitle: "공식 자막",
+        .liveProvisionalSubtitle: "임시 자막",
+        .liveRecentSource: "최근 원문",
+        .liveHistory: "최근 기록",
+        .liveShowSettings: "설정 펼치기",
+        .liveHideSettings: "설정 접기",
+        .liveShowHistory: "기록 펼치기",
+        .liveHideHistory: "기록 접기",
+        .liveJumpToLatest: "최신으로",
+        .liveNewHistory: "새 내용 · 최신으로",
+        .liveHistoryLimit: "이 창의 기록은 언어별 최근 50,000자까지 유지되며, 오래된 내용은 삭제됩니다.",
+        .liveHistoryEmpty: "음성이 들어오면 기록이 표시됩니다.",
+        .liveLargerText: "자막 글자 크게",
+        .liveSmallerText: "자막 글자 작게",
+        .liveHistoryTranslation: "번역",
+        .liveHistorySource: "원문",
+        .liveCaptionLegend: "공식: 굵게 · 임시: 보통",
+        .liveRecentSourceHelp: "원문과 번역은 별도로 도착하므로 문장별로 일치하지 않을 수 있습니다."
     ]
 
     private static let japanese: [Key: String] = [
@@ -467,7 +524,26 @@ enum AppText {
         .liveTranscriptionNoTranscript: "リアルタイム文字起こしがここに表示されます。",
         .liveTranscriptionBillingNote: "リアルタイム文字起こしはgpt-live-transcribeを使用し、音声時間に基づいて課金されます。Free tierは利用できません。",
         .spokenLanguage: "音声の言語",
-        .automaticLanguage: "自動"
+        .automaticLanguage: "自動",
+        .liveFocusTitle: "現在翻訳中",
+        .liveOfficialSubtitle: "公式字幕",
+        .liveProvisionalSubtitle: "仮字幕",
+        .liveRecentSource: "最新の原文",
+        .liveHistory: "最近の履歴",
+        .liveShowSettings: "設定を表示",
+        .liveHideSettings: "設定を隠す",
+        .liveShowHistory: "履歴を表示",
+        .liveHideHistory: "履歴を隠す",
+        .liveJumpToLatest: "最新へ移動",
+        .liveNewHistory: "新しい内容 · 最新へ",
+        .liveHistoryLimit: "このウィンドウでは、各言語の最新50,000文字まで履歴を保持します。古い内容は削除されます。",
+        .liveHistoryEmpty: "音声を受信すると履歴が表示されます。",
+        .liveLargerText: "字幕を大きく",
+        .liveSmallerText: "字幕を小さく",
+        .liveHistoryTranslation: "翻訳",
+        .liveHistorySource: "原文",
+        .liveCaptionLegend: "公式：太字・仮：通常",
+        .liveRecentSourceHelp: "原文と翻訳は別々に届くため、文ごとに対応しない場合があります。"
     ]
 
     private static let chinese: [Key: String] = [
@@ -580,6 +656,25 @@ enum AppText {
         .liveTranscriptionNoTranscript: "实时转录内容将显示在这里。",
         .liveTranscriptionBillingNote: "实时转录使用 gpt-live-transcribe，并按音频时长计费。Free tier 不受支持。",
         .spokenLanguage: "语音语言",
-        .automaticLanguage: "自动"
+        .automaticLanguage: "自动",
+        .liveFocusTitle: "正在翻译",
+        .liveOfficialSubtitle: "正式字幕",
+        .liveProvisionalSubtitle: "临时字幕",
+        .liveRecentSource: "最新原文",
+        .liveHistory: "最近记录",
+        .liveShowSettings: "展开设置",
+        .liveHideSettings: "收起设置",
+        .liveShowHistory: "展开记录",
+        .liveHideHistory: "收起记录",
+        .liveJumpToLatest: "跳转到最新",
+        .liveNewHistory: "新内容 · 跳转到最新",
+        .liveHistoryLimit: "此窗口每种语言最多保留最新 50,000 个字符的记录。更早的内容会被删除。",
+        .liveHistoryEmpty: "收到语音后，记录会显示在这里。",
+        .liveLargerText: "增大字幕",
+        .liveSmallerText: "减小字幕",
+        .liveHistoryTranslation: "翻译",
+        .liveHistorySource: "原文",
+        .liveCaptionLegend: "正式：粗体 · 临时：常规",
+        .liveRecentSourceHelp: "原文和翻译会分别到达，因此可能不会逐句对齐。"
     ]
 }
